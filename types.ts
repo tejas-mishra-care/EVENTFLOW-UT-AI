@@ -31,6 +31,9 @@ export interface Event {
   autoSendEmail?: boolean; // If true, email ticket automatically on registration
   emailTemplateHtml?: string; // Optional custom HTML template with placeholders
   idCardTemplateHtml?: string; // Optional custom HTML ID card template
+  ticketPrefix?: string; // Prefix for ticket codes e.g. 'G-'
+  nextTicketNumber?: number; // Next number to assign e.g. 151
+  useTicketCodeInQR?: boolean; // If true, QR embeds ticket code instead of doc id
   autoPrintOnScan?: boolean; // Auto print ID card after successful scan
   idCardShowEmail?: boolean; // Show guest email on badge
   idCardShowEventDate?: boolean; // Show event date on badge
@@ -42,7 +45,8 @@ export interface Guest {
   name: string;
   email: string;
   phone?: string;
-  qrCode: string; // UUID
+  qrCode: string; // Scannable value (can be ticketCode if enabled)
+  ticketCode?: string; // Human-friendly code e.g. G-151
   checkedIn: boolean;
   checkedInAt?: string;
   verifiedBy?: string;

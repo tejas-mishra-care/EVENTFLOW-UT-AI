@@ -61,6 +61,7 @@ const renderCustomTemplate = (tpl: string, event: Event, guest: Guest) => {
   let html = tpl
     .replace(/{{\s*guest\.name\s*}}/g, escapeHtml(guest.name))
     .replace(/{{\s*guest\.email\s*}}/g, escapeHtml(guest.email))
+    .replace(/{{\s*guest\.ticketCode\s*}}/g, escapeHtml((guest as any).ticketCode || guest.qrCode))
     .replace(/{{\s*guest\.phone\s*}}/g, escapeHtml(guest.phone || ''))
     .replace(/{{\s*guest\.id\s*}}/g, escapeHtml(guest.id || ''))
     .replace(/{{\s*event\.name\s*}}/g, escapeHtml(event.name))
@@ -87,6 +88,7 @@ export const generateEmailTemplate = (event: Event, guest: Guest) => {
   if ((event as any).emailTemplateHtml && (event as any).emailTemplateHtml.trim()) {
     return renderCustomTemplate((event as any).emailTemplateHtml, event, guest);
   }
+  const ticketCode = (guest as any).ticketCode || guest.qrCode;
   return `
     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
       ${event.logoUrl ? `<img src="${event.logoUrl}" alt="Logo" style="height: 50px; display: block; margin: 0 auto 20px;" />` : ''}
@@ -101,7 +103,7 @@ export const generateEmailTemplate = (event: Event, guest: Guest) => {
       <div style="text-align: center; margin: 30px 0;">
         <p style="font-size: 12px; color: #666; margin-bottom: 10px;">Present this QR code at the entrance:</p>
         <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(guest.qrCode)}" alt="QR Code" style="width: 150px; height: 150px; border: 4px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />
-        <p style="font-family: monospace; color: #999; font-size: 10px; margin-top: 5px;">${escapeHtml(guest.qrCode)}</p>
+        <p style="font-family: monospace; color: #444; font-size: 12px; margin-top: 6px;"><strong>Ticket:</strong> ${escapeHtml(ticketCode)}</p>
       </div>
       <p style="text-align: center; color: #888; font-size: 12px;">Sent via EventFlow</p>
     </div>

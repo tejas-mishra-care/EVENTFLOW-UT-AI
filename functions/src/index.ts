@@ -73,6 +73,7 @@ export const processQueuedEmail = functions.firestore
     }
 
     const cfg = configDoc && configDoc.exists ? (configDoc.data() as any) : null;
+    const plainText = `Ticket: ${data.qrCode || ''}\n${data.subject || ''}`;
 
     try {
       if (cfg && cfg.provider === 'resend' && cfg.apiKey) {
@@ -88,6 +89,7 @@ export const processQueuedEmail = functions.firestore
             to: data.to,
             subject: data.subject,
             html: data.html,
+            text: plainText,
             attachments: attachmentsResend,
           }),
         });
@@ -129,6 +131,7 @@ export const processQueuedEmail = functions.firestore
           to: data.to,
           subject: data.subject,
           html: data.html,
+          text: plainText,
           attachments: attachmentsSmtp,
         });
 

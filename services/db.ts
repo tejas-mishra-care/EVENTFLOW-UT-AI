@@ -81,6 +81,9 @@ export const createEvent = async (eventData: Omit<Event, 'id' | 'ownerId'>): Pro
 
   const docRef = await addDoc(collection(db, 'events'), {
     ...eventData,
+    ticketPrefix: (eventData as any).ticketPrefix ?? 'G-',
+    nextTicketNumber: (eventData as any).nextTicketNumber ?? 151,
+    useTicketCodeInQR: (eventData as any).useTicketCodeInQR ?? true,
     ownerId: user.id,
     createdAt: serverTimestamp()
   });
@@ -152,9 +155,25 @@ export const getEventById = async (id: string): Promise<Event | undefined> => {
 
 export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checkedIn'>): Promise<Guest> => {
   const docRef = doc(collection(db, 'guests'));
+  // fetch event config to compute ticket code
+  let prefix = 'G-';
+  let nextNum = 151;
+  let useTicket = true;
+  try {
+    const evtSnap = await getDoc(doc(db, 'events', guestData.eventId));
+    if (evtSnap.exists()) {
+      const evt = evtSnap.data() as any;
+      prefix = evt.ticketPrefix || prefix;
+      nextNum = typeof evt.nextTicketNumber === 'number' ? evt.nextTicketNumber : nextNum;
+      useTicket = !!evt.useTicketCodeInQR;
+    }
+  } catch {}
+  const ticketCode = `${prefix}${nextNum}`;
+  const qrValue = useTicket ? ticketCode : docRef.id;
   const newGuestData = {
     ...guestData,
-    qrCode: docRef.id,
+    qrCode: qrValue,
+    ticketCode,
     checkedIn: false,
     inviteSent: false,
     idCardPrinted: false,
@@ -162,6 +181,10 @@ export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checked
   };
 
   await setDoc(docRef, newGuestData);
+  // bump nextTicketNumber
+  try {
+    await updateDoc(doc(db, 'events', guestData.eventId), { nextTicketNumber: nextNum + 1 });
+  } catch {}
   
   return {
     id: docRef.id,
@@ -191,24 +214,44 @@ export const clearEventGuests = async (eventId: string): Promise<void> => {
 
 export const addGuestsBulk = async (eventId: string, guestsData: any[]): Promise<void> => {
   const batch = writeBatch(db);
+  // load event settings once
+  let prefix = 'G-';
+  let nextNum = 151;
+  let useTicket = true;
+  try {
+    const evtSnap = await getDoc(doc(db, 'events', eventId));
+    if (evtSnap.exists()) {
+      const evt = evtSnap.data() as any;
+      prefix = evt.ticketPrefix || prefix;
+      nextNum = typeof evt.nextTicketNumber === 'number' ? evt.nextTicketNumber : nextNum;
+      useTicket = !!evt.useTicketCodeInQR;
+    }
+  } catch {}
+  let assigned = 0;
   
   guestsData.forEach(g => {
     const docRef = doc(collection(db, 'guests')); // Auto-ID
+    const ticketCode = `${prefix}${nextNum + assigned}`;
+    const qrValue = useTicket ? ticketCode : docRef.id;
     batch.set(docRef, {
       eventId,
       name: g.name,
       email: g.email,
       phone: g.phone || '',
       customData: g.customData || {},
-      qrCode: docRef.id,
+      qrCode: qrValue,
+      ticketCode,
       checkedIn: false,
       inviteSent: false,
       idCardPrinted: false,
       createdAt: serverTimestamp()
     });
+    assigned += 1;
   });
 
   await batch.commit();
+  // bump nextTicketNumber by assigned
+  try { await updateDoc(doc(db, 'events', eventId), { nextTicketNumber: nextNum + assigned }); } catch {}
 };
 
 export const getEventGuests = async (eventId: string): Promise<Guest[]> => {
@@ -218,18 +261,47 @@ export const getEventGuests = async (eventId: string): Promise<Guest[]> => {
     const data = (docSnap.data() as any) || {};
     return { id: docSnap.id, ...(data as object) } as Guest;
   });
-
-  // Backfill qrCode to use the Firestore document ID for legacy data
-  for (const g of guests) {
-    if (!g.qrCode || g.qrCode !== g.id) {
-      try {
-        const docRef = doc(db, 'guests', g.id);
-        await updateDoc(docRef, { qrCode: g.id });
-        g.qrCode = g.id;
-      } catch (e) {
-        console.warn('Failed to backfill qrCode for guest', g.id, e);
-      }
+  // Load event config to handle ticket codes
+  let prefix = 'G-';
+  let nextNum = 151;
+  let useTicket = true;
+  try {
+    const evtSnap = await getDoc(doc(db, 'events', eventId));
+    if (evtSnap.exists()) {
+      const evt = evtSnap.data() as any;
+      prefix = evt.ticketPrefix || prefix;
+      nextNum = typeof evt.nextTicketNumber === 'number' ? evt.nextTicketNumber : nextNum;
+      useTicket = !!evt.useTicketCodeInQR;
     }
+  } catch {}
+
+  // Backfill missing ticket codes; optionally align qrCode to ticket code
+  let assigned = 0;
+  for (const g of guests) {
+    try {
+      const docRef = doc(db, 'guests', g.id);
+      const updates: any = {};
+      if (!g.ticketCode) {
+        const t = `${prefix}${nextNum + assigned}`;
+        updates.ticketCode = t;
+        assigned += 1;
+        if (useTicket) updates.qrCode = t;
+      } else if (useTicket && g.qrCode !== g.ticketCode) {
+        updates.qrCode = g.ticketCode;
+      } else if (!useTicket && (!g.qrCode || g.qrCode !== g.id)) {
+        // ensure qrCode is doc id when not using ticket code
+        updates.qrCode = g.id;
+      }
+      if (Object.keys(updates).length) {
+        await updateDoc(docRef, updates);
+        Object.assign(g, updates);
+      }
+    } catch (e) {
+      console.warn('Ticket backfill failed for guest', g.id, e);
+    }
+  }
+  if (assigned > 0) {
+    try { await updateDoc(doc(db, 'events', eventId), { nextTicketNumber: nextNum + assigned }); } catch {}
   }
 
   return guests;

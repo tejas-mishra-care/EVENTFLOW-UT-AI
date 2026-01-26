@@ -427,6 +427,26 @@ export const EventDetails: React.FC = () => {
       img.src = "data:image/svg+xml;base64," + btoa(svgData);
   };
 
+  const openQrWindow = (value: string, label: string) => {
+      try {
+        const w = window.open('', '_blank', 'width=420,height=520');
+        if (!w) return;
+        const imgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(value)}`;
+        const html = `<!doctype html><html><head><meta charset="utf-8"/><title>QR</title></head>
+          <body style="margin:0;padding:16px;font-family:Arial,sans-serif;background:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;box-sizing:border-box">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.08)">
+              <img src="${imgUrl}" alt="QR" style="width:280px;height:280px;image-rendering:pixelated"/>
+              <div style="margin-top:8px;font-family:monospace;font-size:14px;color:#111"><strong>Ticket:</strong> ${label}</div>
+            </div>
+          </body></html>`;
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+      } catch (e) {
+        console.warn('Failed to open QR window', e);
+      }
+  };
+
   const handleUpdateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!event) return;
