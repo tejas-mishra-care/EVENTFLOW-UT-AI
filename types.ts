@@ -30,6 +30,7 @@ export interface Event {
   emailMessage?: string; // Custom message for invites
   autoSendEmail?: boolean; // If true, email ticket automatically on registration
   emailTemplateHtml?: string; // Optional custom HTML template with placeholders
+  idCardTemplateHtml?: string; // Optional custom HTML ID card template
   autoPrintOnScan?: boolean; // Auto print ID card after successful scan
   idCardShowEmail?: boolean; // Show guest email on badge
   idCardShowEventDate?: boolean; // Show event date on badge

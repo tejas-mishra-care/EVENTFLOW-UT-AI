@@ -58,9 +58,11 @@ const renderCustomTemplate = (tpl: string, event: Event, guest: Guest) => {
     guest.qrCode
   )}" alt="QR Code" style="width: 150px; height: 150px; border: 4px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />`;
 
-  return tpl
+  let html = tpl
     .replace(/{{\s*guest\.name\s*}}/g, escapeHtml(guest.name))
     .replace(/{{\s*guest\.email\s*}}/g, escapeHtml(guest.email))
+    .replace(/{{\s*guest\.phone\s*}}/g, escapeHtml(guest.phone || ''))
+    .replace(/{{\s*guest\.id\s*}}/g, escapeHtml(guest.id || ''))
     .replace(/{{\s*event\.name\s*}}/g, escapeHtml(event.name))
     .replace(/{{\s*event\.date\s*}}/g, escapeHtml(event.date))
     .replace(/{{\s*event\.location\s*}}/g, escapeHtml(event.location))
@@ -70,6 +72,15 @@ const renderCustomTemplate = (tpl: string, event: Event, guest: Guest) => {
     .replace(/{{\s*qrCode\s*}}/g, escapeHtml(guest.qrCode))
     .replace(/{{\s*qrImage\s*}}/g, qrImg)
     .replace(/{{\s*message\s*}}/g, escapeHtml(event.emailMessage || ''));
+
+  // Dynamic custom field placeholders: {{custom.<Label>}}
+  html = html.replace(/{{\s*custom\.([^}]+)\s*}}/g, (_m, keyRaw) => {
+    const key = String(keyRaw || '').trim();
+    const val = (guest.customData && guest.customData[key]) ? guest.customData[key] : '';
+    return escapeHtml(val || '');
+  });
+
+  return html;
 };
 
 export const generateEmailTemplate = (event: Event, guest: Guest) => {

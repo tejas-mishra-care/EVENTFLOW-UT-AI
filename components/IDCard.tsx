@@ -24,6 +24,57 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
     return <div className="print-only hidden flex items-center justify-center h-screen bg-gray-100 p-4 text-gray-600">Missing guest ID data</div>;
   }
 
+  // Template helpers for custom HTML
+  const escapeHtml = (input: string | undefined | null) => {
+    const s = String(input ?? '');
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+
+  const renderCustomTemplate = (tpl: string) => {
+    const qrImg = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
+      guest.qrCode
+    )}" alt="QR Code" style="width: 150px; height: 150px;" />`;
+
+    let html = tpl
+      .replace(/{{\s*guest\.name\s*}}/g, escapeHtml(guest.name))
+      .replace(/{{\s*guest\.email\s*}}/g, escapeHtml(guest.email))
+      .replace(/{{\s*guest\.phone\s*}}/g, escapeHtml(guest.phone || ''))
+      .replace(/{{\s*guest\.id\s*}}/g, escapeHtml(guest.id || ''))
+      .replace(/{{\s*event\.name\s*}}/g, escapeHtml(event.name))
+      .replace(/{{\s*event\.date\s*}}/g, escapeHtml(event.date))
+      .replace(/{{\s*event\.location\s*}}/g, escapeHtml(event.location))
+      .replace(/{{\s*event\.description\s*}}/g, escapeHtml(event.description))
+      .replace(/{{\s*event\.logoUrl\s*}}/g, escapeHtml(event.logoUrl || ''))
+      .replace(/{{\s*event\.flyerUrl\s*}}/g, escapeHtml(event.flyerUrl || ''))
+      .replace(/{{\s*qrCode\s*}}/g, escapeHtml(guest.qrCode))
+      .replace(/{{\s*qrImage\s*}}/g, qrImg)
+      .replace(/{{\s*message\s*}}/g, escapeHtml((event as any).emailMessage || ''));
+
+    // Dynamic custom fields: {{custom.<Label>}}
+    html = html.replace(/{{\s*custom\.([^}]+)\s*}}/g, (_m, keyRaw) => {
+      const key = String(keyRaw || '').trim();
+      const val = (guest.customData && guest.customData[key]) ? guest.customData[key] : '';
+      return escapeHtml(val || '');
+    });
+
+    return html;
+  };
+
+  // If a custom HTML template is provided for ID cards, use it
+  if ((event as any).idCardTemplateHtml && (event as any).idCardTemplateHtml.trim()) {
+    const html = renderCustomTemplate((event as any).idCardTemplateHtml);
+    return (
+      <div className="print-only hidden flex items-center justify-center h-screen bg-gray-100">
+        <div className="shadow-none" dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
+    );
+  }
+
   // Common hole punch
   const HolePunch = () => (
     <div className="w-4 h-4 rounded-full bg-gray-200 border border-gray-400 absolute top-4 left-1/2 -translate-x-1/2 z-10"></div>

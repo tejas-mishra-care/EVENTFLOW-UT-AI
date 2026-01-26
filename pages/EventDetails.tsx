@@ -1534,6 +1534,19 @@ export const EventDetails: React.FC = () => {
                             </div>
                         </div>
 
+                        {/* ID Card Template Section */}
+                        <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
+                          <h3 className="text-lg font-bold text-slate-900 mb-4">ID Card Template</h3>
+                          <p className="text-xs text-slate-500 mb-2">Optional: Use custom HTML for badges. Supports placeholders: {`{{guest.name}}`}, {`{{guest.email}}`}, {`{{guest.phone}}`}, {`{{guest.id}}`}, {`{{event.name}}`}, {`{{event.date}}`}, {`{{event.location}}`}, {`{{event.description}}`}, {`{{event.logoUrl}}`}, {`{{event.flyerUrl}}`}, {`{{qrCode}}`}, {`{{qrImage}}`}, and custom fields as {`{{custom.Company}}`} (replace Company with your field label).</p>
+                          <textarea
+                            value={editForm.idCardTemplateHtml || ''}
+                            onChange={e => setEditForm({ ...editForm, idCardTemplateHtml: e.target.value })}
+                            placeholder="Paste ID Card HTML. Example: <div style='width:300px;height:450px;border:1px solid #000;padding:12px;font-family:sans-serif'><img src='{{event.logoUrl}}' style='height:40px' /><h2 style='margin:8px 0'>{{event.name}}</h2><h1 style='font-size:20px;margin:6px 0'>{{guest.name}}</h1><p style='font-size:12px;color:#666'>{{guest.email}}</p><div>{{qrImage}}</div></div>"
+                            className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 h-40 font-mono text-xs"
+                          />
+                          <p className="text-xs text-slate-500 mt-1">Leave blank to use the selected built‑in layout (Standard/Modern/Minimal).</p>
+                        </div>
+
                          <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <h3 className="text-lg font-bold text-slate-900 mb-4">Volunteer Access</h3>
                             <div className="flex items-center gap-4">
