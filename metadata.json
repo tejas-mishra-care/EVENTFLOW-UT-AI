@@ -1,0 +1,7 @@
+{
+  "name": "EventFlow - QR Event Manager",
+  "description": "A comprehensive event management system with QR code generation, guest list management (CSV), and volunteer scanning with thermal printing support.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EventFlow - Event Management System</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎫</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: '#4f46e5',
+              secondary: '#10b981',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @media print {
+        body * {
+          visibility: hidden;
+        }
+        .print-only, .print-only * {
+          visibility: visible;
+        }
+        .print-only {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+          margin: 0;
+          padding: 0;
+          background: white;
+          display: flex !important;
+          align-items: flex-start;
+          justify-content: center;
+          /* CRITICAL: Forces background colors to print */
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        /* Thermal Printer Optimization (58mm width approx) */
+        @page {
+          size: 58mm auto; 
+          margin: 0mm;
+        }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "react": "https://esm.sh/react@18.2.0",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+    "react-router-dom": "https://esm.sh/react-router-dom@6.22.3?external=react,react-dom",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react",
+    "papaparse": "https://esm.sh/papaparse@5.4.1",
+    "react-qr-code": "https://esm.sh/react-qr-code@2.0.12?external=react",
+    "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8",
+    "firebase/app": "https://esm.sh/firebase@10.9.0/app",
+    "firebase/auth": "https://esm.sh/firebase@10.9.0/auth",
+    "firebase/firestore": "https://esm.sh/firebase@10.9.0/firestore",
+    "firebase/": "https://esm.sh/firebase@^12.8.0/",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
+</head>
+  <body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
