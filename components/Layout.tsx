@@ -41,10 +41,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
 
       {/* Sidebar / Navbar */}
       <nav className={`
-        bg-indigo-800 text-white w-full md:w-64 flex-shrink-0 md:min-h-screen
-        fixed md:static top-[60px] md:top-0 z-40 transition-transform duration-300 ease-in-out
+        bg-indigo-800 text-white 
+        w-full ${isDesktopSidebarOpen ? 'md:w-64' : 'md:w-0'}
+        flex-shrink-0 md:min-h-screen
+        fixed md:static top-[60px] md:top-0 z-40 transition-[transform,width] duration-300 ease-in-out
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
-        ${isDesktopSidebarOpen ? 'md:translate-x-0' : 'md:-translate-x-full'}
+        ${isDesktopSidebarOpen ? 'md:translate-x-0' : 'md:-translate-x-full md:absolute'}
         h-[calc(100vh-60px)] md:h-auto overflow-y-auto flex flex-col shadow-2xl md:shadow-none
       `}>
         {/* Mobile-only internal close button (Redundant but requested for clarity) */}
