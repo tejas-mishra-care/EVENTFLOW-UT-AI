@@ -1461,6 +1461,49 @@ export const EventDetails: React.FC = () => {
                                 placeholder="We are excited to see you..."
                                 className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 h-24"
                             />
+
+                            <div className="mt-4 flex items-center gap-3">
+                              <input
+                                id="autoPrintOnScan"
+                                type="checkbox"
+                                checked={!!editForm.autoPrintOnScan}
+                                onChange={e => setEditForm({ ...editForm, autoPrintOnScan: e.target.checked })}
+                                className="w-4 h-4 border border-slate-300 rounded"
+                              />
+                              <label htmlFor="autoPrintOnScan" className="text-sm text-slate-700">Auto print ID card after successful scan</label>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <label className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                                <input
+                                  type="checkbox"
+                                  checked={!!editForm.idCardShowEmail}
+                                  onChange={e => setEditForm({ ...editForm, idCardShowEmail: e.target.checked })}
+                                  className="w-4 h-4 border border-slate-300 rounded"
+                                />
+                                <span className="text-sm text-slate-700">Show guest email on ID card</span>
+                              </label>
+                              <label className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                                <input
+                                  type="checkbox"
+                                  checked={editForm.idCardShowEventDate !== false}
+                                  onChange={e => setEditForm({ ...editForm, idCardShowEventDate: e.target.checked })}
+                                  className="w-4 h-4 border border-slate-300 rounded"
+                                />
+                                <span className="text-sm text-slate-700">Show event date on ID card</span>
+                              </label>
+                            </div>
+
+                            <div className="mt-6">
+                              <label className="block text-sm font-medium text-slate-700 mb-1">Advanced: Email Template (HTML)</label>
+                              <textarea
+                                value={editForm.emailTemplateHtml || ''}
+                                onChange={e => setEditForm({ ...editForm, emailTemplateHtml: e.target.value })}
+                                placeholder="Paste full HTML. Supported placeholders: {{guest.name}}, {{guest.email}}, {{event.name}}, {{event.date}}, {{event.location}}, {{event.description}}, {{event.logoUrl}}, {{event.flyerUrl}}, {{message}}, {{qrCode}}, {{qrImage}}"
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 h-40 font-mono text-xs"
+                              />
+                              <p className="text-xs text-slate-500 mt-1">Leave blank to use the default template.</p>
+                            </div>
                         </div>
 
                          <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">

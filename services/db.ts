@@ -98,7 +98,8 @@ export const updateEvent = async (eventId: string, updates: Partial<Event>): Pro
   
   // Return the updated object (fetching it fresh or merging)
   const snap = await getDoc(docRef);
-  return { id: snap.id, ...snap.data() } as Event;
+  const data = (snap.data() as any) || {};
+  return { id: snap.id, ...(data as object) } as Event;
 };
 
 export const deleteEvent = async (eventId: string): Promise<void> => {
@@ -132,7 +133,10 @@ export const getEvents = async (): Promise<Event[]> => {
   }
 
   const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Event));
+  return snapshot.docs.map(d => {
+    const data = (d.data() as any) || {};
+    return { id: d.id, ...(data as object) } as Event;
+  });
 };
 
 export const getEventById = async (id: string): Promise<Event | undefined> => {
@@ -147,18 +151,17 @@ export const getEventById = async (id: string): Promise<Event | undefined> => {
 // --- Guests ---
 
 export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checkedIn'>): Promise<Guest> => {
-  const qrCode = generateId() + '-' + generateId();
-  
+  const docRef = doc(collection(db, 'guests'));
   const newGuestData = {
     ...guestData,
-    qrCode,
+    qrCode: docRef.id,
     checkedIn: false,
     inviteSent: false,
     idCardPrinted: false,
     createdAt: serverTimestamp()
   };
 
-  const docRef = await addDoc(collection(db, 'guests'), newGuestData);
+  await setDoc(docRef, newGuestData);
   
   return {
     id: docRef.id,
@@ -197,7 +200,7 @@ export const addGuestsBulk = async (eventId: string, guestsData: any[]): Promise
       email: g.email,
       phone: g.phone || '',
       customData: g.customData || {},
-      qrCode: generateId() + '-' + generateId(),
+      qrCode: docRef.id,
       checkedIn: false,
       inviteSent: false,
       idCardPrinted: false,
@@ -211,17 +214,18 @@ export const addGuestsBulk = async (eventId: string, guestsData: any[]): Promise
 export const getEventGuests = async (eventId: string): Promise<Guest[]> => {
   const q = query(collection(db, 'guests'), where("eventId", "==", eventId));
   const snapshot = await getDocs(q);
-  const guests = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as Guest));
+  const guests = snapshot.docs.map(docSnap => {
+    const data = (docSnap.data() as any) || {};
+    return { id: docSnap.id, ...(data as object) } as Guest;
+  });
 
-  // Backfill missing qrCode values for legacy data
+  // Backfill qrCode to use the Firestore document ID for legacy data
   for (const g of guests) {
-    if (!g.qrCode || (typeof g.qrCode === 'string' && g.qrCode.trim() === '')) {
-      const newQr = generateId() + '-' + generateId();
+    if (!g.qrCode || g.qrCode !== g.id) {
       try {
         const docRef = doc(db, 'guests', g.id);
-        await updateDoc(docRef, { qrCode: newQr });
-        // update local object to reflect change
-        g.qrCode = newQr;
+        await updateDoc(docRef, { qrCode: g.id });
+        g.qrCode = g.id;
       } catch (e) {
         console.warn('Failed to backfill qrCode for guest', g.id, e);
       }
@@ -237,7 +241,18 @@ export const getGuestByQRCode = async (qrCode: string): Promise<Guest | undefine
   const snapshot = await getDocs(q);
   if (!snapshot.empty) {
     const doc = snapshot.docs[0];
-    return { id: doc.id, ...doc.data() } as Guest;
+    const data = (doc.data() as any) || {};
+    return { id: doc.id, ...(data as object) } as Guest;
+  }
+  // Backward-compatibility: if no match, the scanned value might be the document ID
+  try {
+    const direct = await getDoc(doc(db, 'guests', qrCode));
+    if (direct.exists()) {
+      const data = (direct.data() as any) || {};
+      return { id: direct.id, ...(data as object) } as Guest;
+    }
+  } catch (_) {
+    // ignore
   }
   return undefined;
 };

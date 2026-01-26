@@ -11,6 +11,8 @@ interface IDCardProps {
 export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
   const accentColor = event.idCardColor || '#000000';
   const layout = event.idCardLayout || 'standard';
+  const showEmail = !!event.idCardShowEmail;
+  const showEventDate = event.idCardShowEventDate !== false;
 
   // Helper to validate QR code values
   const isValidQRValue = (value: string | undefined): boolean => {
@@ -37,9 +39,11 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
                      <div className="mt-8 mb-auto text-xl font-bold rotate-180" style={{ writingMode: 'vertical-rl' }}>
                         {event.name}
                      </div>
-                     <div className="text-xs rotate-180 mt-4 opacity-75" style={{ writingMode: 'vertical-rl' }}>
-                        {event.date}
-                     </div>
+                     {showEventDate && (
+                       <div className="text-xs rotate-180 mt-4 opacity-75" style={{ writingMode: 'vertical-rl' }}>
+                          {event.date}
+                       </div>
+                     )}
                 </div>
                 
                 {/* Main Content */}
@@ -53,6 +57,9 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
                             {guest.name}
                         </h1>
                         <p className="text-sm text-slate-500 font-medium uppercase tracking-wider">Guest</p>
+                        {showEmail && (
+                          <p className="text-xs text-slate-500 mt-1 break-words">{guest.email}</p>
+                        )}
                         
                         {guest.customData && Object.values(guest.customData)[0] && (
                            <div className="mt-4 pt-4 border-t border-gray-100">
@@ -94,6 +101,9 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
                     <div className="px-4 py-1 bg-gray-100 rounded-full inline-block mx-auto text-xs font-bold uppercase tracking-widest text-gray-600">
                         Verified Guest
                     </div>
+                    {showEmail && (
+                      <p className="text-[10px] text-gray-500 mt-2 break-words">{guest.email}</p>
+                    )}
                 </div>
 
                 <div className="mt-auto">
@@ -126,7 +136,9 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
         </div>
 
         <h2 className="text-xl font-bold uppercase tracking-wide mb-1 leading-tight">{event.name}</h2>
-        <p className="text-xs text-gray-500 uppercase tracking-widest mb-8">{event.date}</p>
+        {showEventDate && (
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-8">{event.date}</p>
+        )}
 
         <div className="flex-1 flex flex-col justify-center w-full">
             <h1 className="text-3xl font-black text-slate-900 mb-2 break-words leading-tight">
@@ -140,6 +152,9 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
             </span>
             {guest.customData && Object.values(guest.customData)[0] && (
                <p className="text-sm text-gray-500 mt-2 font-medium">{Object.values(guest.customData)[0]}</p>
+            )}
+            {showEmail && (
+              <p className="text-xs text-gray-500 mt-2 break-words">{guest.email}</p>
             )}
         </div>
 

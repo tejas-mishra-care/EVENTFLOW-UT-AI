@@ -100,6 +100,9 @@ export const Scanner: React.FC = () => {
             setScannedGuest({...guest, checkedIn: true, checkedInAt: new Date().toISOString()});
             await updateStats();
             playSound('success');
+            if (event?.autoPrintOnScan) {
+              await handlePrint(guest);
+            }
         } catch (e) {
             setScanStatus('error');
             setMessage('System error during check-in.');
@@ -151,10 +154,11 @@ export const Scanner: React.FC = () => {
       }
   };
 
-  const handlePrint = async () => {
-    if (scannedGuest) {
-      await markGuestIdPrinted(scannedGuest.id);
-      setScannedGuest(prev => prev ? ({ ...prev, idCardPrinted: true }) : null);
+  const handlePrint = async (g?: Guest | null) => {
+    const target = g ?? scannedGuest;
+    if (target) {
+      await markGuestIdPrinted(target.id);
+      setScannedGuest(prev => prev ? ({ ...prev, idCardPrinted: true }) : ({ ...target, idCardPrinted: true } as Guest));
       window.print();
     }
   };
