@@ -13,6 +13,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
   const navigate = useNavigate();
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(true);
 
   const handleLogout = () => {
     logoutUser();
@@ -42,7 +43,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
       <nav className={`
         bg-indigo-800 text-white w-full md:w-64 flex-shrink-0 md:min-h-screen
         fixed md:static top-[60px] md:top-0 z-40 transition-transform duration-300 ease-in-out
-        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
+        ${isDesktopSidebarOpen ? 'md:translate-x-0' : 'md:-translate-x-full'}
         h-[calc(100vh-60px)] md:h-auto overflow-y-auto flex flex-col shadow-2xl md:shadow-none
       `}>
         {/* Mobile-only internal close button (Redundant but requested for clarity) */}
@@ -56,12 +58,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
              </button>
         </div>
 
-        <div className="p-6 hidden md:block">
+        <div className="p-6 hidden md:flex items-center justify-between">
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Scan className="w-8 h-8" />
             EventFlow
           </h1>
-          <p className="text-xs text-indigo-300 mt-1 uppercase tracking-wider">{userRole} Portal</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-indigo-300 uppercase tracking-wider">{userRole} Portal</p>
+            <button
+              onClick={() => setIsDesktopSidebarOpen(false)}
+              className="ml-2 p-2 rounded hover:bg-indigo-700 text-indigo-200"
+              aria-label="Close sidebar"
+              title="Close sidebar"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="px-4 py-2 space-y-2 flex-1 pt-4 md:pt-2">
@@ -127,6 +139,19 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
           className="fixed inset-0 bg-black/50 z-30 md:hidden backdrop-blur-sm"
           onClick={() => setIsMobileMenuOpen(false)}
         ></div>
+      )}
+
+      {/* Desktop sidebar opener */}
+      {!isDesktopSidebarOpen && (
+        <button
+          onClick={() => setIsDesktopSidebarOpen(true)}
+          className="hidden md:flex fixed left-2 top-2 z-30 items-center gap-2 bg-indigo-800 text-white px-3 py-2 rounded-lg shadow hover:bg-indigo-700"
+          aria-label="Open sidebar"
+          title="Open sidebar"
+        >
+          <Menu size={18} />
+          Menu
+        </button>
       )}
     </div>
   );

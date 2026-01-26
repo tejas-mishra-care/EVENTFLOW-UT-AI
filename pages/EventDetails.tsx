@@ -262,7 +262,7 @@ export const EventDetails: React.FC = () => {
         for (const guest of guestsToInvite) {
             const html = generateEmailTemplate(event, guest);
             if (user) {
-                            const res = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user.id);
+                            const res = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user.id, undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
                             if (res.success) {
                                 await updateGuest(guest.id, { inviteSent: true });
                             } else {
@@ -287,7 +287,7 @@ export const EventDetails: React.FC = () => {
     try {
         const html = generateEmailTemplate(event, guest);
                 if (user) {
-                    const res = await sendEmail(guest.email, `Ticket for ${event.name}`, html, user.id);
+                    const res = await sendEmail(guest.email, `Ticket for ${event.name}`, html, user.id, undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
                     if (res.success) {
                         await updateGuest(guest.id, { inviteSent: true });
                     } else {
@@ -517,7 +517,7 @@ export const EventDetails: React.FC = () => {
                 const guest = guests.find(g => g.id === id);
                                         if (guest) {
                                         const html = generateEmailTemplate(event, guest);
-                                        const res = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user?.id || '');
+                                        const res = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user?.id || '', undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
                                         if (res.success) {
                                             await updateGuest(guest.id, { inviteSent: true });
                                         } else {

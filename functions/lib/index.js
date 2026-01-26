@@ -40,7 +40,45 @@ exports.processQueuedEmail = functions.firestore
     console.log('Processing queuedEmail', docId, data);
     // Fetch user's saved email config if available
     let configDoc = null;
+    const attachmentsResend = [];
+    const attachmentsSmtp = [];
+    const fetchAsBase64 = async (url) => {
+        const r = await fetch(url);
+        const ab = await r.arrayBuffer();
+        return Buffer.from(ab).toString('base64');
+    };
     try {
+        if (data.qrCode && typeof data.qrCode === 'string' && data.qrCode.trim().length > 0) {
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(data.qrCode)}`;
+            try {
+                const b64 = await fetchAsBase64(qrUrl);
+                attachmentsResend.push({ filename: 'ticket-qr.png', content: b64 });
+                attachmentsSmtp.push({ filename: 'ticket-qr.png', content: Buffer.from(b64, 'base64') });
+            }
+            catch (e) {
+                console.warn('Failed to attach QR image', e);
+            }
+        }
+        if (data.flyerUrl && typeof data.flyerUrl === 'string' && data.flyerUrl.trim().length > 0) {
+            try {
+                if (data.flyerUrl.startsWith('data:')) {
+                    const parts = data.flyerUrl.split(',');
+                    const b64 = parts.length > 1 ? parts[1] : '';
+                    if (b64) {
+                        attachmentsResend.push({ filename: 'flyer.png', content: b64 });
+                        attachmentsSmtp.push({ filename: 'flyer.png', content: Buffer.from(b64, 'base64') });
+                    }
+                }
+                else {
+                    const b64 = await fetchAsBase64(data.flyerUrl);
+                    attachmentsResend.push({ filename: 'flyer.png', content: b64 });
+                    attachmentsSmtp.push({ filename: 'flyer.png', content: Buffer.from(b64, 'base64') });
+                }
+            }
+            catch (e) {
+                console.warn('Failed to attach flyer image', e);
+            }
+        }
         configDoc = await db.collection('emailSettings').doc(data.userId).get();
     }
     catch (e) {
@@ -61,6 +99,7 @@ exports.processQueuedEmail = functions.firestore
                     to: data.to,
                     subject: data.subject,
                     html: data.html,
+                    attachments: attachmentsResend,
                 }),
             });
             const text = await resp.text();
@@ -85,9 +124,8 @@ exports.processQueuedEmail = functions.firestore
             }
         }
         else if (cfg && cfg.provider === 'smtp' && cfg.smtpHost && cfg.smtpUsername && cfg.smtpPassword) {
-            // Send via SMTP using nodemailer
             const port = Number(cfg.smtpPort || 587);
-            const secure = port === 465; // 465 = implicit TLS, 587 = STARTTLS
+            const secure = port === 465;
             const transporter = nodemailer_1.default.createTransport({
                 host: cfg.smtpHost,
                 port,
@@ -96,7 +134,6 @@ exports.processQueuedEmail = functions.firestore
                     user: cfg.smtpUsername,
                     pass: cfg.smtpPassword,
                 },
-                // For port 587, use STARTTLS and require TLS if configured
                 requireTLS: port === 587 ? !!cfg.useTLS : undefined,
             });
             const info = await transporter.sendMail({
@@ -104,6 +141,7 @@ exports.processQueuedEmail = functions.firestore
                 to: data.to,
                 subject: data.subject,
                 html: data.html,
+                attachments: attachmentsSmtp,
             });
             await db.collection('sentEmails').add({
                 queuedId: docId,

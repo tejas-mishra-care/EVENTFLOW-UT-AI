@@ -17,6 +17,8 @@ interface QueuedEmail {
   smtpUsername?: string;
   smtpPassword?: string;
   useTLS?: boolean;
+  qrCode?: string | null;
+  flyerUrl?: string | null;
 }
 
 export const processQueuedEmail = functions.firestore
@@ -28,7 +30,43 @@ export const processQueuedEmail = functions.firestore
 
     // Fetch user's saved email config if available
     let configDoc: FirebaseFirestore.DocumentSnapshot | null = null;
+    const attachmentsResend: any[] = [];
+    const attachmentsSmtp: Array<{ filename: string; content: Buffer }> = [];
+    const fetchAsBase64 = async (url: string) => {
+      const r = await fetch(url);
+      const ab = await r.arrayBuffer();
+      return Buffer.from(ab).toString('base64');
+    };
     try {
+      if (data.qrCode && typeof data.qrCode === 'string' && data.qrCode.trim().length > 0) {
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(data.qrCode)}`;
+        try {
+          const b64 = await fetchAsBase64(qrUrl);
+          attachmentsResend.push({ filename: 'ticket-qr.png', content: b64 });
+          attachmentsSmtp.push({ filename: 'ticket-qr.png', content: Buffer.from(b64, 'base64') });
+        } catch (e) {
+          console.warn('Failed to attach QR image', e);
+        }
+      }
+
+      if (data.flyerUrl && typeof data.flyerUrl === 'string' && data.flyerUrl.trim().length > 0) {
+        try {
+          if (data.flyerUrl.startsWith('data:')) {
+            const parts = data.flyerUrl.split(',');
+            const b64 = parts.length > 1 ? parts[1] : '';
+            if (b64) {
+              attachmentsResend.push({ filename: 'flyer.png', content: b64 });
+              attachmentsSmtp.push({ filename: 'flyer.png', content: Buffer.from(b64, 'base64') });
+            }
+          } else {
+            const b64 = await fetchAsBase64(data.flyerUrl);
+            attachmentsResend.push({ filename: 'flyer.png', content: b64 });
+            attachmentsSmtp.push({ filename: 'flyer.png', content: Buffer.from(b64, 'base64') });
+          }
+        } catch (e) {
+          console.warn('Failed to attach flyer image', e);
+        }
+      }
       configDoc = await db.collection('emailSettings').doc(data.userId).get();
     } catch (e) {
       console.warn('Failed to fetch emailSettings', e);
@@ -50,6 +88,7 @@ export const processQueuedEmail = functions.firestore
             to: data.to,
             subject: data.subject,
             html: data.html,
+            attachments: attachmentsResend,
           }),
         });
 
@@ -90,6 +129,7 @@ export const processQueuedEmail = functions.firestore
           to: data.to,
           subject: data.subject,
           html: data.html,
+          attachments: attachmentsSmtp,
         });
 
         await db.collection('sentEmails').add({

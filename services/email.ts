@@ -102,7 +102,8 @@ export const sendEmail = async (
   subject: string,
   html: string,
   userId: string,
-  fromEmail?: string
+  fromEmail?: string,
+  options?: { eventId?: string; guestId?: string; qrCode?: string; flyerUrl?: string }
 ): Promise<{ success: boolean; message: string }> => {
   try {
     // Get user's email configuration
@@ -142,6 +143,10 @@ export const sendEmail = async (
         createdAt: new Date().toISOString(),
         status: 'queued',
         retries: 0,
+        eventId: options?.eventId || null,
+        guestId: options?.guestId || null,
+        qrCode: options?.qrCode || null,
+        flyerUrl: options?.flyerUrl || null,
       });
 
       console.log(`Email queued for ${to} via resend (server-side worker)`);
@@ -163,6 +168,10 @@ export const sendEmail = async (
       createdAt: new Date().toISOString(),
       status: 'queued',
       retries: 0,
+      eventId: options?.eventId || null,
+      guestId: options?.guestId || null,
+      qrCode: options?.qrCode || null,
+      flyerUrl: options?.flyerUrl || null,
     });
 
     console.log(`Email queued for ${to} via ${config.provider}`);

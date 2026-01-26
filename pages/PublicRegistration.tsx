@@ -64,7 +64,9 @@ export const PublicRegistration: React.FC = () => {
               newGuest.email,
               `Your ticket for ${event.name}`,
               html,
-              event.ownerId
+              event.ownerId,
+              undefined,
+              { eventId: event.id, guestId: newGuest.id, qrCode: newGuest.qrCode, flyerUrl: event.flyerUrl }
             );
             if (emailResult.success) {
               await updateGuest(newGuest.id, { inviteSent: true });
