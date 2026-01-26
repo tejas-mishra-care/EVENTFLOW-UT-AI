@@ -47,7 +47,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
         fixed md:static top-[60px] md:top-0 z-40 transition-[transform,width] duration-300 ease-in-out
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
         ${isDesktopSidebarOpen ? 'md:translate-x-0' : 'md:-translate-x-full md:absolute'}
-        h-[calc(100vh-60px)] md:h-auto overflow-y-auto flex flex-col shadow-2xl md:shadow-none
+        h-[calc(100vh-60px)] md:h-screen overflow-y-auto overflow-x-hidden flex flex-col shadow-2xl md:shadow-none
       `}>
         {/* Mobile-only internal close button (Redundant but requested for clarity) */}
         <div className="md:hidden flex justify-between items-center p-4 border-b border-indigo-700 bg-indigo-900/50">
@@ -147,7 +147,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, userRole = 'owner' }) 
       {!isDesktopSidebarOpen && (
         <button
           onClick={() => setIsDesktopSidebarOpen(true)}
-          className="hidden md:flex fixed left-2 top-2 z-30 items-center gap-2 bg-indigo-800 text-white px-3 py-2 rounded-lg shadow hover:bg-indigo-700"
+          className="hidden md:flex fixed bottom-6 left-6 z-40 items-center gap-2 bg-indigo-800 text-white px-3 py-2 rounded-lg shadow-lg hover:bg-indigo-700"
           aria-label="Open sidebar"
           title="Open sidebar"
         >

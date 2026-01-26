@@ -39,6 +39,8 @@ export const EventDetails: React.FC = () => {
 
   // Printing State
   const [printingGuest, setPrintingGuest] = useState<Guest | null>(null);
+  const [autoPrintBusy, setAutoPrintBusy] = useState(false);
+  const [printedThisSession, setPrintedThisSession] = useState<Set<string>>(new Set());
 
   // CSV Mapping State
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
@@ -84,6 +86,13 @@ export const EventDetails: React.FC = () => {
         return () => clearInterval(interval);
     }
   }, [id]);
+
+  // Reset printing state after browser print completes
+  useEffect(() => {
+    const onAfterPrint = () => setPrintingGuest(null);
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => window.removeEventListener('afterprint', onAfterPrint);
+  }, []);
 
   const refreshData = async (eventId: string) => {
     const eventGuests = await getEventGuests(eventId);
@@ -353,6 +362,25 @@ export const EventDetails: React.FC = () => {
           window.print();
       }, 200);
   };
+
+  // Admin-side auto print when a guest is checked in (scanner updates DB)
+  useEffect(() => {
+    if (!event?.autoPrintOnScan) return;
+    if (autoPrintBusy) return;
+    // find next checked-in guest that hasn't been printed
+    const next = guests.find(g => g.checkedIn && !g.idCardPrinted && !printedThisSession.has(g.id));
+    if (next) {
+      setAutoPrintBusy(true);
+      handlePrintBadge(next).finally(() => {
+        setAutoPrintBusy(false);
+        setPrintedThisSession(prev => {
+          const s = new Set(prev);
+          s.add(next.id);
+          return s;
+        });
+      });
+    }
+  }, [guests, event?.autoPrintOnScan, autoPrintBusy]);
 
   const handleEditGuest = (guest: Guest) => {
       setGuestEditForm(guest);

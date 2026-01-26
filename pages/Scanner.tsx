@@ -100,9 +100,6 @@ export const Scanner: React.FC = () => {
             setScannedGuest({...guest, checkedIn: true, checkedInAt: new Date().toISOString()});
             await updateStats();
             playSound('success');
-            if (event?.autoPrintOnScan) {
-              await handlePrint(guest);
-            }
         } catch (e) {
             setScanStatus('error');
             setMessage('System error during check-in.');
@@ -179,8 +176,7 @@ export const Scanner: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col">
-      {/* Printable Area - Hidden normally, visible on print */}
-      {scannedGuest && <IDCard guest={scannedGuest} event={event} />}
+      {/* Printable area removed on scanner; printing handled by admin page */}
 
       {/* Header */}
       <div className="bg-slate-800 p-4 shadow-lg flex items-center justify-between z-10 sticky top-0">
@@ -284,13 +280,7 @@ export const Scanner: React.FC = () => {
                         </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-3">
-                        <button 
-                            onClick={handlePrint}
-                            className={`py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors ${scannedGuest.idCardPrinted ? 'bg-slate-700 text-slate-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
-                        >
-                            <Printer size={20} /> {scannedGuest.idCardPrinted ? 'Reprint Badge' : 'Print Badge'}
-                        </button>
+                    <div className="grid grid-cols-1 gap-3">
                         <button 
                             onClick={resetScan}
                             className="bg-slate-700 hover:bg-slate-600 text-white py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
