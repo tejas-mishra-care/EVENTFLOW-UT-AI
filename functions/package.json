@@ -2,7 +2,7 @@
   "name": "eventflow-email-functions",
   "version": "1.0.0",
   "engines": {
-    "node": "18"
+    "node": "20"
   },
   "main": "lib/index.js",
   "scripts": {
@@ -13,11 +13,11 @@
   "dependencies": {
     "firebase-admin": "^11.9.0",
     "firebase-functions": "^4.4.0",
-    "nodemailer": "^6.9.4",
-    "node-fetch": "^3.4.1"
+    "nodemailer": "^6.9.4"
   },
   "devDependencies": {
-    "typescript": "4.9.5",
-    "@types/node": "18.16.0"
+    "@types/node": "18.16.0",
+    "@types/nodemailer": "^7.0.5",
+    "typescript": "4.9.5"
   }
 }
