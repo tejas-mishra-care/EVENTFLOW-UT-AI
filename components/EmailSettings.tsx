@@ -155,7 +155,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
             <AlertCircle size={20} className="text-blue-600 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-blue-800">
               <p className="font-semibold mb-1">No Email Service Configured</p>
-              <p>Choose a free or paid email provider below. Your guests won't receive invites until you set this up.</p>
+              <p>Choose an email provider below. Your guests won't receive invites until you set this up.</p>
             </div>
           </div>
 
@@ -174,7 +174,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                 }`}
               >
                 <p className="font-semibold text-slate-900">Resend</p>
-                <p className="text-xs text-slate-600 mt-1">Free: 100/day</p>
+                <p className="text-xs text-slate-600 mt-1">100/day limit</p>
                 <p className="text-xs text-green-600 font-medium mt-1">Recommended</p>
               </button>
 
@@ -188,7 +188,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
               >
                 <p className="font-semibold text-slate-900">SMTP</p>
                 <p className="text-xs text-slate-600 mt-1">Gmail, Outlook, etc.</p>
-                <p className="text-xs text-amber-600 font-medium mt-1">Free</p>
+                <p className="text-xs text-amber-600 font-medium mt-1">Standard</p>
               </button>
 
               <button
@@ -229,7 +229,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                 <div className="text-sm">
                   <p className="font-semibold text-slate-900">Getting Started with Resend</p>
                   <ol className="text-slate-700 mt-2 space-y-1 ml-4">
-                    <li>1. Sign up free at <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline">resend.com</a></li>
+                    <li>1. Sign up at <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline">resend.com</a></li>
                     <li>2. Go to API Keys section</li>
                     <li>3. Create a new API key</li>
                     <li>4. Paste it below</li>

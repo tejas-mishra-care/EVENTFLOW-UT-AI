@@ -165,7 +165,7 @@ export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checked
       const evt = evtSnap.data() as any;
       prefix = evt.ticketPrefix || prefix;
       nextNum = typeof evt.nextTicketNumber === 'number' ? evt.nextTicketNumber : nextNum;
-      useTicket = !!evt.useTicketCodeInQR;
+      useTicket = (typeof evt.useTicketCodeInQR === 'boolean') ? !!evt.useTicketCodeInQR : true;
     }
   } catch {}
   const ticketCode = `${prefix}${nextNum}`;

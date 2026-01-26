@@ -13,6 +13,8 @@ import SafeQRCode from '../components/SafeQRCode';
 import { Upload, Download, Mail, Search, CheckCircle, Copy, ExternalLink, Send, Settings, Save, Trash2, Image as ImageIcon, Plus, X, Activity, ArrowRight, Eye, LayoutTemplate, Printer, Edit2, RotateCcw, Filter, UserCheck, CircleDashed, CheckSquare, Square, QrCode } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { getCurrentUser } from '../services/db';
+import { db } from '../services/firebase';
+import { collection, query, where, onSnapshot, doc, runTransaction, serverTimestamp } from 'firebase/firestore';
 
 export const EventDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -79,10 +81,32 @@ export const EventDetails: React.FC = () => {
                 await refreshData(id);
              }
         };
+
+  // Acquire a short-lived print lock to avoid double prints across multiple admin windows
+  const acquirePrintLock = async (guestId: string): Promise<boolean> => {
+    try {
+      const adminName = (getCurrentUser()?.name || getCurrentUser()?.email || 'Admin');
+      const ok = await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'guests', guestId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return false;
+        const data: any = snap.data();
+        if (data.idCardPrinted) return false;
+        const last = data.printingAt?.toMillis?.() || 0;
+        const fresh = Date.now() - last < 20000; // 20s lock window
+        if (data.printingBy && fresh) return false;
+        tx.update(ref, { printingBy: adminName, printingAt: serverTimestamp() });
+        return true;
+      });
+      return !!ok;
+    } catch (e) {
+      return false;
+    }
+  };
         loadEvent();
 
         // Poll for updates (live feed & active volunteers)
-        const interval = setInterval(() => refreshData(id), 10000); // 10s poll to be nice to Firestore quotas
+        const interval = setInterval(() => refreshData(id), 1500); // faster poll for near-instant auto print
         return () => clearInterval(interval);
     }
   }, [id]);
@@ -93,6 +117,11 @@ export const EventDetails: React.FC = () => {
     window.addEventListener('afterprint', onAfterPrint);
     return () => window.removeEventListener('afterprint', onAfterPrint);
   }, []);
+
+  // Reset session print memory when switching events
+  useEffect(() => {
+    setPrintedThisSession(new Set());
+  }, [id]);
 
   const refreshData = async (eventId: string) => {
     const eventGuests = await getEventGuests(eventId);
@@ -363,24 +392,30 @@ export const EventDetails: React.FC = () => {
       }, 200);
   };
 
-  // Admin-side auto print when a guest is checked in (scanner updates DB)
+  // Real-time auto print when a guest is checked in (scanner updates DB)
   useEffect(() => {
-    if (!event?.autoPrintOnScan) return;
-    if (autoPrintBusy) return;
-    // find next checked-in guest that hasn't been printed
-    const next = guests.find(g => g.checkedIn && !g.idCardPrinted && !printedThisSession.has(g.id));
-    if (next) {
-      setAutoPrintBusy(true);
-      handlePrintBadge(next).finally(() => {
-        setAutoPrintBusy(false);
-        setPrintedThisSession(prev => {
-          const s = new Set(prev);
-          s.add(next.id);
-          return s;
-        });
-      });
-    }
-  }, [guests, event?.autoPrintOnScan, autoPrintBusy]);
+    if (!id || !event?.autoPrintOnScan) return;
+    const qGuests = query(collection(db, 'guests'), where('eventId', '==', id));
+    const unsub = onSnapshot(qGuests, async (snap) => {
+      if (autoPrintBusy) return;
+      for (const change of snap.docChanges()) {
+        const d: any = change.doc.data();
+        const g = { id: change.doc.id, ...(d as object) } as Guest;
+        if (g.checkedIn && !g.idCardPrinted && !printedThisSession.has(g.id)) {
+          setAutoPrintBusy(true);
+          const locked = await acquirePrintLock(g.id);
+          if (!locked) { setAutoPrintBusy(false); continue; }
+          await handlePrintBadge(g);
+          setAutoPrintBusy(false);
+          setPrintedThisSession(prev => {
+            const s = new Set(prev); s.add(g.id); return s;
+          });
+          break; // one at a time
+        }
+      }
+    });
+    return () => unsub();
+  }, [id, event?.autoPrintOnScan, autoPrintBusy, printedThisSession]);
 
   const handleEditGuest = (guest: Guest) => {
       setGuestEditForm(guest);
@@ -445,6 +480,28 @@ export const EventDetails: React.FC = () => {
       } catch (e) {
         console.warn('Failed to open QR window', e);
       }
+  };
+
+  // Acquire a short-lived print lock to avoid double prints across admin windows
+  const acquirePrintLock = async (guestId: string): Promise<boolean> => {
+    try {
+      const adminName = (getCurrentUser()?.name || getCurrentUser()?.email || 'Admin');
+      const ok = await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'guests', guestId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return false;
+        const data: any = snap.data();
+        if (data.idCardPrinted) return false;
+        const last = data.printingAt?.toMillis?.() || 0;
+        const fresh = Date.now() - last < 20000; // 20s lock window
+        if (data.printingBy && fresh) return false;
+        tx.update(ref, { printingBy: adminName, printingAt: serverTimestamp() });
+        return true;
+      });
+      return !!ok;
+    } catch (e) {
+      return false;
+    }
   };
 
   const handleUpdateEvent = async (e: React.FormEvent) => {
