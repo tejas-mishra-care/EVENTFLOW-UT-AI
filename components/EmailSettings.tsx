@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getEmailConfig, saveEmailConfig, EmailConfig, sendEmail } from '../services/email';
 import { getCurrentUser } from '../services/db';
 import { Mail, Save, AlertCircle, CheckCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
@@ -15,6 +15,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const editingRef = useRef(false);
   const [testEmail, setTestEmail] = useState(user?.email || '');
   const [sendingTest, setSendingTest] = useState(false);
   const [config, setConfig] = useState<EmailConfig>({
@@ -30,6 +31,8 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
 
   useEffect(() => {
     if (isOpen && user) {
+      // reset edit flag at open to allow one fresh load
+      editingRef.current = false;
       loadConfig();
     }
   }, [isOpen, user]);
@@ -39,7 +42,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
     setLoading(true);
     try {
       const savedConfig = await getEmailConfig(user.id);
-      if (savedConfig) {
+      if (savedConfig && !editingRef.current) {
         setConfig(savedConfig);
       }
     } catch (error) {
@@ -69,7 +72,15 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
 
     setSaving(true);
     try {
-      await saveEmailConfig(user.id, config);
+      const cleaned: EmailConfig = {
+        ...config,
+        fromEmail: (config.fromEmail || '').trim(),
+        smtpHost: (config.smtpHost || '').trim(),
+        smtpUsername: (config.smtpUsername || '').trim(),
+        apiKey: (config.apiKey || '').trim(),
+      };
+      await saveEmailConfig(user.id, cleaned);
+      editingRef.current = false;
       addToast('Email settings saved successfully!', 'success');
       onClose();
     } catch (error: any) {
@@ -203,10 +214,11 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
               type="email"
               className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
               placeholder="noreply@yourcompany.com"
+              autoComplete="off"
               value={config.fromEmail}
-              onChange={(e) => setConfig({ ...config, fromEmail: e.target.value })}
+              onChange={(e) => { editingRef.current = true; setConfig({ ...config, fromEmail: e.target.value }); }}
             />
-            <p className="text-xs text-slate-500 mt-1">This will appear as the sender in guest emails</p>
+            <p className="text-xs text-slate-500 mt-1">This will appear as the sender in guest emails. Use a sender like <span className="font-medium">name@eventflow.bharatsdev.com</span>.</p>
           </div>
 
           {/* Resend Configuration */}
@@ -234,8 +246,9 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                     type={showPassword ? 'text' : 'password'}
                     className="w-full px-4 py-2 pr-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-sm"
                     placeholder="re_xxxxxxxxxxxxxxxxxx"
+                    autoComplete="new-password"
                     value={config.apiKey || ''}
-                    onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
+                    onChange={(e) => { editingRef.current = true; setConfig({ ...config, apiKey: e.target.value }); }}
                   />
                   <button
                     type="button"
@@ -275,7 +288,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                     placeholder="smtp.gmail.com"
                     value={config.smtpHost || ''}
-                    onChange={(e) => setConfig({ ...config, smtpHost: e.target.value })}
+                    onChange={(e) => { editingRef.current = true; setConfig({ ...config, smtpHost: e.target.value }); }}
                   />
                 </div>
                 <div>
@@ -287,7 +300,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                     placeholder="587"
                     value={config.smtpPort || 587}
-                    onChange={(e) => setConfig({ ...config, smtpPort: parseInt(e.target.value) })}
+                    onChange={(e) => { editingRef.current = true; setConfig({ ...config, smtpPort: parseInt(e.target.value) }); }}
                   />
                 </div>
               </div>
@@ -297,7 +310,7 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                   <input
                     type="checkbox"
                     checked={config.useTLS || false}
-                    onChange={(e) => setConfig({ ...config, useTLS: e.target.checked })}
+                    onChange={(e) => { editingRef.current = true; setConfig({ ...config, useTLS: e.target.checked }); }}
                     className="w-4 h-4 border border-slate-300 rounded"
                   />
                   Use TLS Encryption (Recommended)
@@ -312,8 +325,9 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                   type="email"
                   className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                   placeholder="your-email@gmail.com"
+                  autoComplete="username"
                   value={config.smtpUsername || ''}
-                  onChange={(e) => setConfig({ ...config, smtpUsername: e.target.value })}
+                  onChange={(e) => { editingRef.current = true; setConfig({ ...config, smtpUsername: e.target.value }); }}
                 />
               </div>
 
@@ -326,8 +340,9 @@ export const EmailSettings: React.FC<EmailSettingsProps> = ({ isOpen, onClose })
                     type={showPassword ? 'text' : 'password'}
                     className="w-full px-4 py-2 pr-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                     placeholder="••••••••"
+                    autoComplete="new-password"
                     value={config.smtpPassword || ''}
-                    onChange={(e) => setConfig({ ...config, smtpPassword: e.target.value })}
+                    onChange={(e) => { editingRef.current = true; setConfig({ ...config, smtpPassword: e.target.value }); }}
                   />
                   <button
                     type="button"

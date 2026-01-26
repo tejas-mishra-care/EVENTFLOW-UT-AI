@@ -72,9 +72,8 @@ export const processQueuedEmail = functions.firestore
         }
 
       } else if (cfg && cfg.provider === 'smtp' && cfg.smtpHost && cfg.smtpUsername && cfg.smtpPassword) {
-        // Send via SMTP using nodemailer
         const port = Number(cfg.smtpPort || 587);
-        const secure = port === 465; // 465 = implicit TLS, 587 = STARTTLS
+        const secure = port === 465;
         const transporter = nodemailer.createTransport({
           host: cfg.smtpHost,
           port,
@@ -83,7 +82,6 @@ export const processQueuedEmail = functions.firestore
             user: cfg.smtpUsername,
             pass: cfg.smtpPassword,
           },
-          // For port 587, use STARTTLS and require TLS if configured
           requireTLS: port === 587 ? !!cfg.useTLS : undefined,
         });
 

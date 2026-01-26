@@ -43,30 +43,55 @@ export const saveEmailConfig = async (userId: string, config: EmailConfig): Prom
   }
 };
 
+const escapeHtml = (input: string | undefined | null) => {
+  const s = String(input ?? '');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+const renderCustomTemplate = (tpl: string, event: Event, guest: Guest) => {
+  const qrImg = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+    guest.qrCode
+  )}" alt="QR Code" style="width: 150px; height: 150px; border: 4px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />`;
+
+  return tpl
+    .replace(/{{\s*guest\.name\s*}}/g, escapeHtml(guest.name))
+    .replace(/{{\s*guest\.email\s*}}/g, escapeHtml(guest.email))
+    .replace(/{{\s*event\.name\s*}}/g, escapeHtml(event.name))
+    .replace(/{{\s*event\.date\s*}}/g, escapeHtml(event.date))
+    .replace(/{{\s*event\.location\s*}}/g, escapeHtml(event.location))
+    .replace(/{{\s*event\.description\s*}}/g, escapeHtml(event.description))
+    .replace(/{{\s*event\.logoUrl\s*}}/g, escapeHtml(event.logoUrl || ''))
+    .replace(/{{\s*event\.flyerUrl\s*}}/g, escapeHtml(event.flyerUrl || ''))
+    .replace(/{{\s*qrCode\s*}}/g, escapeHtml(guest.qrCode))
+    .replace(/{{\s*qrImage\s*}}/g, qrImg)
+    .replace(/{{\s*message\s*}}/g, escapeHtml(event.emailMessage || ''));
+};
+
 export const generateEmailTemplate = (event: Event, guest: Guest) => {
+  if ((event as any).emailTemplateHtml && (event as any).emailTemplateHtml.trim()) {
+    return renderCustomTemplate((event as any).emailTemplateHtml, event, guest);
+  }
   return `
     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
       ${event.logoUrl ? `<img src="${event.logoUrl}" alt="Logo" style="height: 50px; display: block; margin: 0 auto 20px;" />` : ''}
-      
       ${event.flyerUrl ? `<img src="${event.flyerUrl}" alt="Event Banner" style="width: 100%; border-radius: 8px; margin-bottom: 20px;" />` : ''}
-      
       <h1 style="color: #333; text-align: center;">You're Invited!</h1>
-      
-      <p>Hi ${guest.name},</p>
-      
-      <p>${event.emailMessage || `You have been registered for <strong>${event.name}</strong>.`}</p>
-      
+      <p>Hi ${escapeHtml(guest.name)},</p>
+      <p>${escapeHtml(event.emailMessage || `You have been registered for <strong>${event.name}</strong>.`)}</p>
       <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <p style="margin: 5px 0;"><strong>📅 Date:</strong> ${event.date}</p>
-        <p style="margin: 5px 0;"><strong>📍 Location:</strong> ${event.location}</p>
+        <p style="margin: 5px 0;"><strong>📅 Date:</strong> ${escapeHtml(event.date)}</p>
+        <p style="margin: 5px 0;"><strong>📍 Location:</strong> ${escapeHtml(event.location)}</p>
       </div>
-
       <div style="text-align: center; margin: 30px 0;">
         <p style="font-size: 12px; color: #666; margin-bottom: 10px;">Present this QR code at the entrance:</p>
-        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${guest.qrCode}" alt="QR Code" style="width: 150px; height: 150px; border: 4px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />
-        <p style="font-family: monospace; color: #999; font-size: 10px; margin-top: 5px;">${guest.qrCode}</p>
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(guest.qrCode)}" alt="QR Code" style="width: 150px; height: 150px; border: 4px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />
+        <p style="font-family: monospace; color: #999; font-size: 10px; margin-top: 5px;">${escapeHtml(guest.qrCode)}</p>
       </div>
-
       <p style="text-align: center; color: #888; font-size: 12px;">Sent via EventFlow</p>
     </div>
   `;

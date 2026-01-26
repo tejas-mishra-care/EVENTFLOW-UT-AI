@@ -29,6 +29,7 @@ export interface Event {
   idCardLayout?: 'standard' | 'modern' | 'minimal'; // New field
   emailMessage?: string; // Custom message for invites
   autoSendEmail?: boolean; // If true, email ticket automatically on registration
+  emailTemplateHtml?: string; // Optional custom HTML template with placeholders
 }
 
 export interface Guest {
