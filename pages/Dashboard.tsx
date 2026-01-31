@@ -8,7 +8,9 @@ import { Calendar, Users, ArrowRight, Plus, Scan, Database, AlertCircle, Loader2
 import { useToast } from '../components/Toast';
 
 export const Dashboard: React.FC = () => {
-  const [events, setEvents] = useState<(Event & { stats: { total: number; checkedIn: number } })[]>([]);
+  const [events, setEvents] = useState<
+    (Event & { stats: { total: number; checkedIn: number; attendeesCheckedIn?: number; attendeesTotal?: number } })[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const user = getCurrentUser();
   const { addToast } = useToast();
@@ -135,6 +137,13 @@ export const Dashboard: React.FC = () => {
                                     <div className="flex items-center gap-1 text-xs text-primary font-bold group-hover:translate-x-1 transition-transform">
                                         Manage <ArrowRight size={14} />
                                     </div>
+                                </div>
+
+                                <div className="flex items-center justify-between text-xs text-slate-500">
+                                  <span>Attendees</span>
+                                  <span className="font-semibold text-slate-700">
+                                    {(event.stats.attendeesCheckedIn ?? event.stats.checkedIn)} / {(event.stats.attendeesTotal ?? event.stats.total)}
+                                  </span>
                                 </div>
                             </div>
                         </Link>

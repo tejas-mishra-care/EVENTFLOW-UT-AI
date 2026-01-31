@@ -51,6 +51,11 @@ export interface Guest {
   checkedInAt?: string;
   verifiedBy?: string;
   inviteSent?: boolean;
+  inviteSentEmail?: boolean;
+  inviteSentWhatsApp?: boolean;
+  extraAdults?: number;
+  extraChildren?: number;
+  totalAttendees?: number;
   idCardPrinted?: boolean; // Track if badge has been printed
   customData?: Record<string, string>; // Store answers to custom form fields
 }

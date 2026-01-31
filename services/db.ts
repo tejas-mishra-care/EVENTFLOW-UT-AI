@@ -176,6 +176,11 @@ export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checked
     ticketCode,
     checkedIn: false,
     inviteSent: false,
+    inviteSentEmail: false,
+    inviteSentWhatsApp: false,
+    extraAdults: 0,
+    extraChildren: 0,
+    totalAttendees: 1,
     idCardPrinted: false,
     createdAt: serverTimestamp()
   };
@@ -243,6 +248,11 @@ export const addGuestsBulk = async (eventId: string, guestsData: any[]): Promise
       ticketCode,
       checkedIn: false,
       inviteSent: false,
+      inviteSentEmail: false,
+      inviteSentWhatsApp: false,
+      extraAdults: 0,
+      extraChildren: 0,
+      totalAttendees: 1,
       idCardPrinted: false,
       createdAt: serverTimestamp()
     });
@@ -257,70 +267,32 @@ export const addGuestsBulk = async (eventId: string, guestsData: any[]): Promise
 export const getEventGuests = async (eventId: string): Promise<Guest[]> => {
   const q = query(collection(db, 'guests'), where("eventId", "==", eventId));
   const snapshot = await getDocs(q);
-  const guests = snapshot.docs.map(docSnap => {
+  return snapshot.docs.map(docSnap => {
     const data = (docSnap.data() as any) || {};
     return { id: docSnap.id, ...(data as object) } as Guest;
   });
-  // Load event config to handle ticket codes
-  let prefix = 'G-';
-  let nextNum = 151;
-  let useTicket = true;
-  try {
-    const evtSnap = await getDoc(doc(db, 'events', eventId));
-    if (evtSnap.exists()) {
-      const evt = evtSnap.data() as any;
-      prefix = evt.ticketPrefix || prefix;
-      nextNum = typeof evt.nextTicketNumber === 'number' ? evt.nextTicketNumber : nextNum;
-      useTicket = !!evt.useTicketCodeInQR;
-    }
-  } catch {}
-
-  // Backfill missing ticket codes; optionally align qrCode to ticket code
-  let assigned = 0;
-  for (const g of guests) {
-    try {
-      const docRef = doc(db, 'guests', g.id);
-      const updates: any = {};
-      if (!g.ticketCode) {
-        const t = `${prefix}${nextNum + assigned}`;
-        updates.ticketCode = t;
-        assigned += 1;
-        if (useTicket) updates.qrCode = t;
-      } else if (useTicket && g.qrCode !== g.ticketCode) {
-        updates.qrCode = g.ticketCode;
-      } else if (!useTicket && (!g.qrCode || g.qrCode !== g.id)) {
-        // ensure qrCode is doc id when not using ticket code
-        updates.qrCode = g.id;
-      }
-      if (Object.keys(updates).length) {
-        await updateDoc(docRef, updates);
-        Object.assign(g, updates);
-      }
-    } catch (e) {
-      console.warn('Ticket backfill failed for guest', g.id, e);
-    }
-  }
-  if (assigned > 0) {
-    try { await updateDoc(doc(db, 'events', eventId), { nextTicketNumber: nextNum + assigned }); } catch {}
-  }
-
-  return guests;
 };
 
-export const getGuestByQRCode = async (qrCode: string): Promise<Guest | undefined> => {
+export const getGuestByQRCode = async (qrCode: string, eventId?: string): Promise<Guest | undefined> => {
   // Queries in Firestore require an index for optimal performance, but simple where clauses work
   const q = query(collection(db, 'guests'), where("qrCode", "==", qrCode));
   const snapshot = await getDocs(q);
   if (!snapshot.empty) {
-    const doc = snapshot.docs[0];
-    const data = (doc.data() as any) || {};
-    return { id: doc.id, ...(data as object) } as Guest;
+    if (eventId) {
+      const match = snapshot.docs.find(d => (d.data() as any)?.eventId === eventId) || snapshot.docs[0];
+      const data = (match.data() as any) || {};
+      return { id: match.id, ...(data as object) } as Guest;
+    }
+    const docSnap = snapshot.docs[0];
+    const data = (docSnap.data() as any) || {};
+    return { id: docSnap.id, ...(data as object) } as Guest;
   }
   // Backward-compatibility: if no match, the scanned value might be the document ID
   try {
     const direct = await getDoc(doc(db, 'guests', qrCode));
     if (direct.exists()) {
       const data = (direct.data() as any) || {};
+      if (eventId && (data as any)?.eventId && (data as any).eventId !== eventId) return undefined;
       return { id: direct.id, ...(data as object) } as Guest;
     }
   } catch (_) {
@@ -352,11 +324,39 @@ export const markGuestIdPrinted = async (guestId: string): Promise<Guest> => {
 // Note: In Firestore, getting counts usually means reading all docs or using aggregation queries.
 // For this simple app, reading all event guests is fine for small events.
 export const getEventStats = async (eventId: string) => {
+  try {
+    const statsSnap = await getDoc(doc(db, 'eventStats', eventId));
+    if (statsSnap.exists()) {
+      const d: any = statsSnap.data() || {};
+      const total = typeof d.totalGuests === 'number' ? d.totalGuests : 0;
+      const checkedIn = typeof d.checkedInGuests === 'number' ? d.checkedInGuests : 0;
+      const attendeesTotal = typeof d.attendeesTotal === 'number' ? d.attendeesTotal : total;
+      const attendeesCheckedIn = typeof d.attendeesCheckedIn === 'number' ? d.attendeesCheckedIn : checkedIn;
+      return {
+        total,
+        checkedIn,
+        remaining: Math.max(0, total - checkedIn),
+        attendeesCheckedIn,
+        attendeesTotal,
+      };
+    }
+  } catch (_) {
+    // ignore and fallback
+  }
+
   const guests = await getEventGuests(eventId);
+  const getAttendeeCount = (g: any) => {
+    const n = typeof g?.totalAttendees === 'number' ? g.totalAttendees : 1;
+    return Number.isFinite(n) ? n : 1;
+  };
+  const attendeesCheckedIn = guests.filter(g => g.checkedIn).reduce((sum, g) => sum + getAttendeeCount(g as any), 0);
+  const attendeesTotal = guests.reduce((sum, g) => sum + getAttendeeCount(g as any), 0);
   return {
     total: guests.length,
     checkedIn: guests.filter(g => g.checkedIn).length,
-    remaining: guests.filter(g => !g.checkedIn).length
+    remaining: guests.filter(g => !g.checkedIn).length,
+    attendeesCheckedIn,
+    attendeesTotal
   };
 };
 

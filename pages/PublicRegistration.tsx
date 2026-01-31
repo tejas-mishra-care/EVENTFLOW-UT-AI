@@ -69,7 +69,7 @@ export const PublicRegistration: React.FC = () => {
               { eventId: event.id, guestId: newGuest.id, qrCode: newGuest.qrCode, flyerUrl: event.flyerUrl }
             );
             if (emailResult.success) {
-              await updateGuest(newGuest.id, { inviteSent: true });
+              await updateGuest(newGuest.id, { inviteSent: true, inviteSentEmail: true });
               setEmailSent(true);
             } else {
               addToast(`Email status: ${emailResult.message}`, "warning");

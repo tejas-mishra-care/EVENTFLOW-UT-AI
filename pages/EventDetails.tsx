@@ -1,20 +1,21 @@
-
 import React, { useEffect, useState } from 'react';
 import { Layout } from '../components/Layout';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getEventById, getEventGuests, addGuestsBulk, getEventStats, updateGuest, updateEvent, deleteEvent, deleteGuest, clearEventGuests, markGuestIdPrinted, getActiveVolunteers } from '../services/db';
+import { addGuestsBulk, getEventStats, updateGuest, updateEvent, deleteEvent, deleteGuest, clearEventGuests, markGuestIdPrinted } from '../services/db';
 import { sendEmail, generateEmailTemplate } from '../services/email';
+import { sendWhatsAppInvite } from '../services/whatsapp';
 import { fileToBase64 } from '../services/utils';
 import { Event, Guest, FormField } from '../types';
 import { IDCard } from '../components/IDCard';
 import { EmailSettings } from '../components/EmailSettings';
+import { WhatsAppSettings } from '../components/WhatsAppSettings';
 import Papa from 'papaparse';
 import SafeQRCode from '../components/SafeQRCode';
-import { Upload, Download, Mail, Search, CheckCircle, Copy, ExternalLink, Send, Settings, Save, Trash2, Image as ImageIcon, Plus, X, Activity, ArrowRight, Eye, LayoutTemplate, Printer, Edit2, RotateCcw, Filter, UserCheck, CircleDashed, CheckSquare, Square, QrCode } from 'lucide-react';
+import { Upload, Download, Mail, Search, CheckCircle, Copy, ExternalLink, Send, Settings, Save, Trash2, Image as ImageIcon, Plus, X, Activity, ArrowRight, Eye, LayoutTemplate, Printer, Edit2, RotateCcw, Filter, UserCheck, CircleDashed, CheckSquare, Square, QrCode, MessageCircle } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { getCurrentUser } from '../services/db';
 import { db } from '../services/firebase';
-import { collection, query, where, onSnapshot, doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, runTransaction, serverTimestamp, limit, orderBy } from 'firebase/firestore';
 
 export const EventDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -22,8 +23,8 @@ export const EventDetails: React.FC = () => {
   const { addToast } = useToast();
   const [event, setEvent] = useState<Event | undefined>(undefined);
   const [guests, setGuests] = useState<Guest[]>([]);
-  const [stats, setStats] = useState({ total: 0, checkedIn: 0, remaining: 0 });
-  const [activeTab, setActiveTab] = useState<'list' | 'import' | 'settings'>('list');
+  const [stats, setStats] = useState({ total: 0, checkedIn: 0, remaining: 0, attendeesCheckedIn: 0, attendeesTotal: 0 });
+  const [activeTab, setActiveTab] = useState<'list' | 'import' | 'settings' | 'logs'>('list');
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string>('');
   
@@ -33,6 +34,7 @@ export const EventDetails: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
   const [sendingInvites, setSendingInvites] = useState(false);
+  const [inviteChannel, setInviteChannel] = useState<'email' | 'whatsapp' | 'both'>('email');
   
   // Guest Detail Modal State
   const [selectedGuest, setSelectedGuest] = useState<Guest | null>(null);
@@ -65,50 +67,132 @@ export const EventDetails: React.FC = () => {
   const [volunteerStats, setVolunteerStats] = useState<Record<string, number>>({});
   const [activeVolunteers, setActiveVolunteers] = useState<string[]>([]);
   const [showQrModal, setShowQrModal] = useState(false);
+
+  // Delivery / Queue Logs
+  const [logs, setLogs] = useState({
+    queuedEmails: [] as any[],
+    sentEmails: [] as any[],
+    failedEmails: [] as any[],
+    queuedWhatsApps: [] as any[],
+    sentWhatsApps: [] as any[],
+    failedWhatsApps: [] as any[],
+  });
   
   // Email Settings Modal
   const [showEmailSettings, setShowEmailSettings] = useState(false);
+  const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
   const user = getCurrentUser();
 
   useEffect(() => {
-    if (id) {
-        // Load event initially
-        const loadEvent = async () => {
-             const evt = await getEventById(id);
-             if (evt) {
-                setEvent(evt);
-                setEditForm(evt);
-                await refreshData(id);
-             }
-        };
+    if (!id) return;
+    const ref = doc(db, 'events', id);
+    const unsub = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      const evt = { id: snap.id, ...(snap.data() as object) } as Event;
+      setEvent(evt);
+      setEditForm(evt);
+    });
+    return () => unsub();
+  }, [id]);
 
-  // Acquire a short-lived print lock to avoid double prints across multiple admin windows
-  const acquirePrintLock = async (guestId: string): Promise<boolean> => {
-    try {
-      const adminName = (getCurrentUser()?.name || getCurrentUser()?.email || 'Admin');
-      const ok = await runTransaction(db, async (tx) => {
-        const ref = doc(db, 'guests', guestId);
-        const snap = await tx.get(ref);
-        if (!snap.exists()) return false;
-        const data: any = snap.data();
-        if (data.idCardPrinted) return false;
-        const last = data.printingAt?.toMillis?.() || 0;
-        const fresh = Date.now() - last < 20000; // 20s lock window
-        if (data.printingBy && fresh) return false;
-        tx.update(ref, { printingBy: adminName, printingAt: serverTimestamp() });
-        return true;
+  useEffect(() => {
+    if (!id) return;
+    const qGuests = query(collection(db, 'guests'), where('eventId', '==', id));
+    const unsub = onSnapshot(qGuests, (snap) => {
+      const eventGuests = snap.docs.map(d => ({ id: d.id, ...(d.data() as object) } as Guest));
+      setGuests(eventGuests);
+
+      const vStats: Record<string, number> = {};
+      eventGuests.forEach(g => {
+        if (g.checkedIn && g.verifiedBy) {
+          vStats[g.verifiedBy] = (vStats[g.verifiedBy] || 0) + 1;
+        }
       });
-      return !!ok;
-    } catch (e) {
-      return false;
-    }
-  };
-        loadEvent();
+      setVolunteerStats(vStats);
+    });
+    return () => unsub();
+  }, [id]);
 
-        // Poll for updates (live feed & active volunteers)
-        const interval = setInterval(() => refreshData(id), 1500); // faster poll for near-instant auto print
-        return () => clearInterval(interval);
-    }
+  useEffect(() => {
+    if (!id) return;
+    const ref = doc(db, 'eventStats', id);
+    const unsub = onSnapshot(ref, async (snap) => {
+      if (!snap.exists()) {
+        const s = await getEventStats(id);
+        setStats({
+          total: s.total,
+          checkedIn: s.checkedIn,
+          remaining: (s as any).remaining ?? (s.total - s.checkedIn),
+          attendeesCheckedIn: (s as any).attendeesCheckedIn ?? s.checkedIn,
+          attendeesTotal: (s as any).attendeesTotal ?? s.total,
+        });
+        return;
+      }
+      const d: any = snap.data() || {};
+      const total = typeof d.totalGuests === 'number' ? d.totalGuests : 0;
+      const checkedIn = typeof d.checkedInGuests === 'number' ? d.checkedInGuests : 0;
+      const attendeesTotal = typeof d.attendeesTotal === 'number' ? d.attendeesTotal : total;
+      const attendeesCheckedIn = typeof d.attendeesCheckedIn === 'number' ? d.attendeesCheckedIn : checkedIn;
+      setStats({
+        total,
+        checkedIn,
+        remaining: Math.max(0, total - checkedIn),
+        attendeesCheckedIn,
+        attendeesTotal,
+      });
+    });
+    return () => unsub();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    const qSessions = query(collection(db, `events/${id}/sessions`));
+    const unsub = onSnapshot(qSessions, (snap) => {
+      const now = Date.now();
+      const online = snap.docs
+        .map(d => ({ name: d.id, ...(d.data() as any) }))
+        .filter(s => {
+          const lastSeen = s.lastSeen?.toMillis?.() || 0;
+          return now - lastSeen < 2 * 60 * 1000;
+        })
+        .map(s => s.name);
+      setActiveVolunteers(online);
+    });
+    return () => unsub();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+
+    const unsubs: Array<() => void> = [];
+
+    unsubs.push(onSnapshot(query(collection(db, 'queuedEmails'), where('eventId', '==', id), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, queuedEmails: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'sentEmails'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, sentEmails: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'failedEmails'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, failedEmails: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'queuedWhatsApps'), where('eventId', '==', id), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, queuedWhatsApps: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'sentWhatsApps'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, sentWhatsApps: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'failedWhatsApps'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, failedWhatsApps: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    return () => {
+      unsubs.forEach(u => u());
+    };
   }, [id]);
 
   // Reset printing state after browser print completes
@@ -123,24 +207,15 @@ export const EventDetails: React.FC = () => {
     setPrintedThisSession(new Set());
   }, [id]);
 
-  const refreshData = async (eventId: string) => {
-    const eventGuests = await getEventGuests(eventId);
-    setGuests(eventGuests);
-    
-    const s = await getEventStats(eventId);
-    setStats(s);
-    
-    const v = await getActiveVolunteers(eventId);
-    setActiveVolunteers(v);
-
-    // Calculate Volunteer Stats
-    const vStats: Record<string, number> = {};
-    eventGuests.forEach(g => {
-        if (g.checkedIn && g.verifiedBy) {
-            vStats[g.verifiedBy] = (vStats[g.verifiedBy] || 0) + 1;
-        }
-    });
-    setVolunteerStats(vStats);
+  const getLogTime = (row: any) => {
+    const c = row?.createdAt;
+    if (!c) return '';
+    if (typeof c?.toDate === 'function') return c.toDate().toLocaleString();
+    try {
+      return new Date(c).toLocaleString();
+    } catch {
+      return '';
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -236,7 +311,6 @@ export const EventDetails: React.FC = () => {
 
                 if (processedGuests.length > 0) {
                     await addGuestsBulk(event.id, processedGuests);
-                    await refreshData(event.id);
                     setUploadStatus(`Successfully imported ${processedGuests.length} guests.`);
                     setCsvFile(null);
                     setCsvPreview([]);
@@ -264,6 +338,9 @@ export const EventDetails: React.FC = () => {
         Name: g.name,
         Email: g.email,
         Phone: g.phone || '',
+        ExtraAdults: (g as any).extraAdults ?? 0,
+        ExtraChildren: (g as any).extraChildren ?? 0,
+        TotalAttendees: (g as any).totalAttendees ?? 1,
         Status: g.checkedIn ? 'Checked In' : 'Pending',
         CheckedInAt: g.checkedInAt || '',
         VerifiedBy: g.verifiedBy || '',
@@ -285,34 +362,77 @@ export const EventDetails: React.FC = () => {
 
   const handleSendInvites = async () => {
     if (!guests.length || !event) return;
-    const guestsToInvite = guests.filter(g => !g.inviteSent);
+
+    const guestsToInvite = guests.filter(g => {
+      const emailSent = !!((g.inviteSentEmail ?? g.inviteSent) || false);
+      const waSent = !!(g.inviteSentWhatsApp || false);
+      if (inviteChannel === 'email') return !emailSent;
+      if (inviteChannel === 'whatsapp') return !waSent;
+      return !emailSent || !waSent;
+    });
     
     if (guestsToInvite.length === 0) {
         addToast("All guests have already received invitations.", 'info');
         return;
     }
 
-    if (!window.confirm(`Send email invitations to ${guestsToInvite.length} uninvited guests?`)) return;
+    const channelLabel = inviteChannel === 'both' ? 'Email + WhatsApp' : inviteChannel === 'email' ? 'Email' : 'WhatsApp';
+    if (!window.confirm(`Send ${channelLabel} invitations to ${guestsToInvite.length} guests?`)) return;
 
     setSendingInvites(true);
     
     try {
         for (const guest of guestsToInvite) {
-            const html = generateEmailTemplate(event, guest);
             if (user) {
-                            const res = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user.id, undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
-                            if (res.success) {
-                                await updateGuest(guest.id, { inviteSent: true });
-                            } else {
-                                // leave inviteSent false; record message logged in sendEmail
-                                console.warn('Email not sent for', guest.email, res.message);
-                            }
+                const emailAlreadySent = !!((guest.inviteSentEmail ?? guest.inviteSent) || false);
+                const waAlreadySent = !!(guest.inviteSentWhatsApp || false);
+
+                const shouldSendEmail = (inviteChannel === 'email' || inviteChannel === 'both') && !emailAlreadySent;
+                const shouldSendWhatsApp = (inviteChannel === 'whatsapp' || inviteChannel === 'both') && !waAlreadySent;
+
+                const updates: Partial<Guest> = {};
+                let invitedAny = false;
+
+                if (shouldSendEmail && guest.email && guest.email.includes('@')) {
+                  const html = generateEmailTemplate(event, guest);
+                  const emailRes = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user.id, undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
+                  if (emailRes.success) {
+                    updates.inviteSentEmail = true;
+                    invitedAny = true;
+                  } else {
+                    console.warn('Email not sent for', guest.email, emailRes.message);
+                  }
+                }
+
+                if (shouldSendWhatsApp && guest.phone && guest.phone.trim()) {
+                  const waRes = await sendWhatsAppInvite(
+                    guest.phone,
+                    guest.name,
+                    event.name,
+                    (guest.ticketCode || guest.qrCode),
+                    user.id,
+                    { eventId: event.id, guestId: guest.id }
+                  );
+                  if (waRes.success) {
+                    updates.inviteSentWhatsApp = true;
+                    invitedAny = true;
+                  } else {
+                    console.warn('WhatsApp not sent for', guest.phone, waRes.message);
+                  }
+                }
+
+                if (invitedAny) {
+                  updates.inviteSent = true;
+                }
+
+                if (Object.keys(updates).length > 0) {
+                  await updateGuest(guest.id, updates);
+                }
             }
         }
-                await refreshData(event.id);
-                addToast(`Invitations processed for ${guestsToInvite.length} guests. Check failedEmails in Firestore for errors.`, 'info');
+                addToast(`Invitations processed for ${guestsToInvite.length} guests. Check failedEmails / failedWhatsApps in Firestore for errors.`, 'info');
     } catch (e) {
-        addToast("Error queueing emails. Check Firebase connection.", 'error');
+        addToast("Error processing invitations. Check Firebase connection.", 'error');
     } finally {
         setSendingInvites(false);
     }
@@ -327,14 +447,12 @@ export const EventDetails: React.FC = () => {
                 if (user) {
                     const res = await sendEmail(guest.email, `Ticket for ${event.name}`, html, user.id, undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
                     if (res.success) {
-                        await updateGuest(guest.id, { inviteSent: true });
+                        await updateGuest(guest.id, { inviteSent: true, inviteSentEmail: true });
                     } else {
                         console.warn('Resend failed for single resend:', res.message);
                     }
                 }
         
-                // Refresh data to reflect any DB updates (inviteSent etc.)
-                if (event) await refreshData(event.id);
                 addToast(`Resend processed for ${guest.email}`, 'info');
     } catch (e) {
         addToast("Failed to queue email", 'error');
@@ -344,7 +462,6 @@ export const EventDetails: React.FC = () => {
   const handleDeleteGuest = async (guestId: string, guestName: string) => {
       if (window.confirm(`Are you sure you want to remove ${guestName} from the guest list?`)) {
           await deleteGuest(guestId);
-          if (event) await refreshData(event.id);
           if (selectedGuest?.id === guestId) setSelectedGuest(null);
           addToast("Guest removed", 'success');
       }
@@ -370,7 +487,6 @@ export const EventDetails: React.FC = () => {
                });
                addToast("Check-in undone", 'info');
           }
-          if (event) await refreshData(event.id);
           // Also update selectedGuest if it's the one we're toggling
           if (selectedGuest && selectedGuest.id === guest.id) {
               setSelectedGuest(prev => prev ? ({ ...prev, checkedIn: newStatus }) : null);
@@ -383,7 +499,6 @@ export const EventDetails: React.FC = () => {
   const handlePrintBadge = async (guest: Guest) => {
       setPrintingGuest(guest);
       await markGuestIdPrinted(guest.id);
-      if (event) await refreshData(event.id);
       if (selectedGuest && selectedGuest.id === guest.id) {
           setSelectedGuest(prev => prev ? ({ ...prev, idCardPrinted: true }) : null);
       }
@@ -427,9 +542,19 @@ export const EventDetails: React.FC = () => {
       if (!selectedGuest) return;
       
       try {
-          await updateGuest(selectedGuest.id, guestEditForm);
-          if (event) await refreshData(event.id);
-          setSelectedGuest({ ...selectedGuest, ...guestEditForm } as Guest);
+          const updates: any = { ...guestEditForm };
+          const adultsRaw = (updates as any).extraAdults;
+          const childrenRaw = (updates as any).extraChildren;
+          if (typeof adultsRaw !== 'undefined' || typeof childrenRaw !== 'undefined') {
+            const adults = Number.isFinite(Number(adultsRaw)) ? Math.max(0, Math.trunc(Number(adultsRaw))) : 0;
+            const children = Number.isFinite(Number(childrenRaw)) ? Math.max(0, Math.trunc(Number(childrenRaw))) : 0;
+            updates.extraAdults = adults;
+            updates.extraChildren = children;
+            updates.totalAttendees = 1 + adults + children;
+          }
+
+          await updateGuest(selectedGuest.id, updates);
+          setSelectedGuest({ ...selectedGuest, ...(updates as object) } as Guest);
           setIsEditingGuest(false);
           addToast("Guest details updated", 'success');
       } catch (err) {
@@ -559,7 +684,6 @@ export const EventDetails: React.FC = () => {
       
       if (window.confirm(`Are you sure you want to delete ALL ${count} guests? This action cannot be undone.`)) {
           await clearEventGuests(event.id);
-          await refreshData(event.id);
           addToast(`Deleted ${count} guests.`, 'success');
       }
   };
@@ -592,7 +716,6 @@ export const EventDetails: React.FC = () => {
             await deleteGuest(id);
         }
         setSelectedIds(new Set());
-        await refreshData(event.id);
         addToast('Selected guests deleted', 'success');
     }
   };
@@ -608,36 +731,40 @@ export const EventDetails: React.FC = () => {
             });
         }
         setSelectedIds(new Set());
-        await refreshData(event.id);
         addToast('Selected guests checked in', 'success');
     }
   };
 
   const handleBulkEmail = async () => {
     if (!event || selectedIds.size === 0) return;
-    if (window.confirm(`Send email invitation to ${selectedIds.size} selected guests?`)) {
-        setSendingInvites(true);
-        try {
-            for (const id of selectedIds) {
-                const guest = guests.find(g => g.id === id);
-                                        if (guest) {
-                                        const html = generateEmailTemplate(event, guest);
-                                        const res = await sendEmail(guest.email, `You're invited to ${event.name}!`, html, user?.id || '', undefined, { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl });
-                                        if (res.success) {
-                                            await updateGuest(guest.id, { inviteSent: true });
-                                        } else {
-                                            console.warn('Bulk email failed for', guest.email, res.message);
-                                        }
-                                }
-            }
-            setSelectedIds(new Set());
-            await refreshData(event.id);
-            addToast("Emails queued successfully!", 'success');
-        } catch (e) {
-            addToast("Error queueing emails.", 'error');
-        } finally {
-            setSendingInvites(false);
+    if (!window.confirm(`Send email invitation to ${selectedIds.size} selected guests?`)) return;
+
+    setSendingInvites(true);
+    try {
+      for (const id of selectedIds) {
+        const guest = guests.find(g => g.id === id);
+        if (!guest) continue;
+        const alreadySent = !!((guest.inviteSentEmail ?? guest.inviteSent) || false);
+        if (alreadySent) continue;
+        const html = generateEmailTemplate(event, guest);
+        const res = await sendEmail(
+          guest.email,
+          `You're invited to ${event.name}!`,
+          html,
+          user?.id || '',
+          undefined,
+          { eventId: event.id, guestId: guest.id, qrCode: guest.qrCode, flyerUrl: event.flyerUrl }
+        );
+        if (res.success) {
+          await updateGuest(guest.id, { inviteSent: true, inviteSentEmail: true });
         }
+      }
+      setSelectedIds(new Set());
+      addToast("Emails queued successfully!", 'success');
+    } catch (e) {
+      addToast("Error queueing emails.", 'error');
+    } finally {
+      setSendingInvites(false);
     }
   };
 
@@ -706,7 +833,7 @@ export const EventDetails: React.FC = () => {
                     <X size={24} />
                 </button>
                 <h3 className="text-xl font-bold text-slate-900 mb-2">Scan to Register</h3>
-                <p className="text-slate-500 text-sm mb-6">Guests can scan this to open the registration form.</p>
+                <p className="text-slate-500 mb-6">Guests can scan this to open the registration form.</p>
                 {isValidQRValue(getRegistrationLink()) ? (
                   <div className="bg-white p-4 rounded-xl border border-slate-200 inline-block mb-4 shadow-sm">
                     {/* Ensure QR code uses absolute URL */}
@@ -762,7 +889,7 @@ export const EventDetails: React.FC = () => {
             </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <p className="text-sm text-slate-500 uppercase font-semibold">Total Guests</p>
                 <p className="text-3xl font-bold text-slate-900">{stats.total}</p>
@@ -770,6 +897,11 @@ export const EventDetails: React.FC = () => {
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <p className="text-sm text-green-600 uppercase font-semibold">Checked In</p>
                 <p className="text-3xl font-bold text-green-700">{stats.checkedIn}</p>
+            </div>
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                <p className="text-sm text-indigo-600 uppercase font-semibold">Attendees</p>
+                <p className="text-3xl font-bold text-indigo-700">{stats.attendeesCheckedIn}</p>
+                <p className="text-xs text-slate-500 mt-1">of {stats.attendeesTotal}</p>
             </div>
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <p className="text-sm text-slate-500 uppercase font-semibold">Remaining</p>
@@ -896,6 +1028,29 @@ export const EventDetails: React.FC = () => {
                                     onChange={e => setGuestEditForm({...guestEditForm, phone: e.target.value})}
                                 />
                             </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Extra Adults</label>
+                                  <input
+                                      type="number"
+                                      min={0}
+                                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      value={(guestEditForm as any).extraAdults ?? 0}
+                                      onChange={e => setGuestEditForm({ ...guestEditForm, extraAdults: Number(e.target.value || 0) } as any)}
+                                  />
+                              </div>
+                              <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Extra Children</label>
+                                  <input
+                                      type="number"
+                                      min={0}
+                                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      value={(guestEditForm as any).extraChildren ?? 0}
+                                      onChange={e => setGuestEditForm({ ...guestEditForm, extraChildren: Number(e.target.value || 0) } as any)}
+                                  />
+                              </div>
+                            </div>
                             {/* Edit Custom Fields */}
                             {event.formFields?.map(field => (
                                 <div key={field.id}>
@@ -935,7 +1090,7 @@ export const EventDetails: React.FC = () => {
 
                             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                                 <span className="text-sm text-slate-500">Invite Status</span>
-                                {selectedGuest.inviteSent ? (
+                                {(selectedGuest.inviteSentEmail || selectedGuest.inviteSentWhatsApp || selectedGuest.inviteSent) ? (
                                     <span className="text-green-600 font-bold text-sm flex items-center gap-1">
                                         <Mail size={14} /> Sent
                                     </span>
@@ -966,8 +1121,38 @@ export const EventDetails: React.FC = () => {
                                     </button>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2 text-sm">
+                                    <div className="text-slate-500">Guest ID:</div>
+                                    <div className="font-medium font-mono text-xs break-all">{selectedGuest.id}</div>
+
+                                    <div className="text-slate-500">Ticket Code:</div>
+                                    <div className="font-medium">{selectedGuest.ticketCode || '-'}</div>
+
+                                    <div className="text-slate-500">QR Value:</div>
+                                    <div className="font-medium font-mono text-xs break-all">{selectedGuest.qrCode || '-'}</div>
+
                                     <div className="text-slate-500">Phone:</div>
                                     <div className="font-medium">{selectedGuest.phone || '-'}</div>
+
+                                    <div className="text-slate-500">Checked In At:</div>
+                                    <div className="font-medium">{selectedGuest.checkedInAt ? new Date(selectedGuest.checkedInAt).toLocaleString() : '-'}</div>
+
+                                    <div className="text-slate-500">Verified By:</div>
+                                    <div className="font-medium">{selectedGuest.verifiedBy || '-'}</div>
+
+                                    <div className="text-slate-500">Invite Email:</div>
+                                    <div className="font-medium">{((selectedGuest.inviteSentEmail ?? selectedGuest.inviteSent) ? 'Yes' : 'No')}</div>
+
+                                    <div className="text-slate-500">Invite WhatsApp:</div>
+                                    <div className="font-medium">{(selectedGuest.inviteSentWhatsApp ? 'Yes' : 'No')}</div>
+
+                                    <div className="text-slate-500">Extra Adults:</div>
+                                    <div className="font-medium">{(selectedGuest as any).extraAdults ?? 0}</div>
+
+                                    <div className="text-slate-500">Extra Children:</div>
+                                    <div className="font-medium">{(selectedGuest as any).extraChildren ?? 0}</div>
+
+                                    <div className="text-slate-500">Total Attendees:</div>
+                                    <div className="font-medium">{(selectedGuest as any).totalAttendees ?? 1}</div>
                                     
                                     {selectedGuest.customData && Object.entries(selectedGuest.customData).map(([key, val]) => (
                                         <React.Fragment key={key}>
@@ -1035,6 +1220,12 @@ export const EventDetails: React.FC = () => {
                 Import CSV
             </button>
             <button 
+                onClick={() => setActiveTab('logs')}
+                className={`px-6 py-4 text-sm font-medium transition-colors ${activeTab === 'logs' ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+                Logs
+            </button>
+            <button 
                 onClick={() => setActiveTab('settings')}
                 className={`px-6 py-4 text-sm font-medium transition-colors ${activeTab === 'settings' ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
             >
@@ -1077,6 +1268,17 @@ export const EventDetails: React.FC = () => {
                              >
                                 <Download size={16} /> Export CSV
                              </button>
+
+                             <select
+                                value={inviteChannel}
+                                onChange={(e) => setInviteChannel(e.target.value as any)}
+                                className="px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 bg-white text-sm"
+                              >
+                                <option value="email">Email</option>
+                                <option value="whatsapp">WhatsApp</option>
+                                <option value="both">Both</option>
+                              </select>
+
                              <button 
                                 onClick={handleSendInvites}
                                 disabled={sendingInvites}
@@ -1102,6 +1304,7 @@ export const EventDetails: React.FC = () => {
                                     <th className="px-4 py-3 font-semibold">Name</th>
                                     <th className="px-4 py-3 font-semibold">Email</th>
                                     <th className="px-4 py-3 font-semibold">Status</th>
+                                    <th className="px-4 py-3 font-semibold">Attendees</th>
                                     <th className="px-4 py-3 font-semibold">Volunteer</th>
                                     <th className="px-4 py-3 font-semibold">Badge</th>
                                     <th className="px-4 py-3 font-semibold">Invite</th>
@@ -1129,16 +1332,15 @@ export const EventDetails: React.FC = () => {
                                                 </span>
                                             ) : (
                                                 <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">
-                                                    Pending
+                                                    <CircleDashed size={12} /> Pending
                                                 </span>
                                             )}
                                         </td>
-                                        <td className="px-4 py-3 text-sm text-slate-500">
-                                            {guest.verifiedBy ? (
-                                                <span className="flex items-center gap-1">
-                                                    <UserCheck size={14} /> {guest.verifiedBy}
-                                                </span>
-                                            ) : '-'}
+                                        <td className="px-4 py-3 text-slate-700 font-medium">
+                                            {(guest as any).totalAttendees ?? 1}
+                                        </td>
+                                        <td className="px-4 py-3 text-slate-500 text-sm">
+                                            {guest.verifiedBy || '-'}
                                         </td>
                                         <td className="px-4 py-3">
                                             {guest.idCardPrinted ? (
@@ -1148,7 +1350,7 @@ export const EventDetails: React.FC = () => {
                                             )}
                                         </td>
                                         <td className="px-4 py-3">
-                                            {guest.inviteSent ? (
+                                            {(guest.inviteSentEmail || guest.inviteSentWhatsApp || guest.inviteSent) ? (
                                                 <span className="text-xs text-green-600 font-medium flex items-center gap-1"><Mail size={12}/> Sent</span>
                                             ) : (
                                                 <span className="text-xs text-slate-400">Not sent</span>
@@ -1376,6 +1578,89 @@ export const EventDetails: React.FC = () => {
                             {uploadStatus}
                         </p>
                     )}
+                </div>
+            )}
+
+            {activeTab === 'logs' && (
+                <div className="max-w-5xl mx-auto">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued Emails</div>
+                      <div className="divide-y divide-slate-100">
+                        {logs.queuedEmails.length ? logs.queuedEmails.map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-500">{r.subject || ''}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)} {r.status ? `• ${r.status}` : ''}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No queued emails</div>}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent Emails</div>
+                      <div className="divide-y divide-slate-100">
+                        {logs.sentEmails.length ? logs.sentEmails.map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-500">{r.subject || ''}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)} {typeof r.responseStatus === 'number' ? `• ${r.responseStatus}` : ''}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No sent emails</div>}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed Emails</div>
+                      <div className="divide-y divide-slate-100">
+                        {logs.failedEmails.length ? logs.failedEmails.map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-red-600">{r.error || r.reason || 'Failed'}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No failed emails</div>}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued WhatsApps</div>
+                      <div className="divide-y divide-slate-100">
+                        {logs.queuedWhatsApps.length ? logs.queuedWhatsApps.map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-500">{r.templateName || 'template'}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)} {r.status ? `• ${r.status}` : ''}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No queued WhatsApps</div>}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent WhatsApps</div>
+                      <div className="divide-y divide-slate-100">
+                        {logs.sentWhatsApps.length ? logs.sentWhatsApps.map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)} {typeof r.responseStatus === 'number' ? `• ${r.responseStatus}` : ''}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No sent WhatsApps</div>}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed WhatsApps</div>
+                      <div className="divide-y divide-slate-100">
+                        {logs.failedWhatsApps.length ? logs.failedWhatsApps.map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-red-600">{r.error || r.reason || 'Failed'}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No failed WhatsApps</div>}
+                      </div>
+                    </div>
+                  </div>
                 </div>
             )}
 
@@ -1611,6 +1896,27 @@ export const EventDetails: React.FC = () => {
                             </div>
                         </div>
 
+                        <div className="bg-slate-50 p-6 rounded-lg border border-slate-200 mt-6">
+                          <div className="flex items-center justify-between mb-4">
+                            <div>
+                              <h3 className="text-lg font-bold text-slate-900">WhatsApp Configuration</h3>
+                              <p className="text-xs text-slate-500">Send event updates and tickets directly to mobile.</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowWhatsAppSettings(true)}
+                              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors"
+                            >
+                              <MessageCircle size={16} />
+                              Configure WhatsApp
+                            </button>
+                          </div>
+
+                          <div className="text-xs text-slate-600">
+                            To send WhatsApp invites, guests must have a valid phone number with country code.
+                          </div>
+                        </div>
+
                         {/* ID Card Template Section */}
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                           <h3 className="text-lg font-bold text-slate-900 mb-4">ID Card Template</h3>
@@ -1696,6 +2002,11 @@ export const EventDetails: React.FC = () => {
       <EmailSettings 
         isOpen={showEmailSettings} 
         onClose={() => setShowEmailSettings(false)} 
+      />
+
+      <WhatsAppSettings
+        isOpen={showWhatsAppSettings}
+        onClose={() => setShowWhatsAppSettings(false)}
       />
     </Layout>
   );

@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { QRScanner } from '../components/QRScanner';
-import { getEventById, getGuestByQRCode, checkInGuest, getEventStats, getEventGuests, markGuestIdPrinted, updateVolunteerHeartbeat } from '../services/db';
+import { getEventById, getGuestByQRCode, checkInGuest, getEventStats, getEventGuests, markGuestIdPrinted, updateVolunteerHeartbeat, updateGuest } from '../services/db';
 import { Guest, Event } from '../types';
 import { Check, Printer, X, ChevronLeft, User, BarChart, Scan, Search, UserCheck } from 'lucide-react';
 import { IDCard } from '../components/IDCard';
@@ -16,13 +16,27 @@ export const Scanner: React.FC = () => {
   const [scanStatus, setScanStatus] = useState<'idle' | 'success' | 'error' | 'already_checked'>('idle');
   const [message, setMessage] = useState('');
   const [stats, setStats] = useState({ total: 0, checkedIn: 0 });
+  const [attendeesCheckedIn, setAttendeesCheckedIn] = useState(0);
+
+  const [extraAdults, setExtraAdults] = useState<number>(0);
+  const [extraChildren, setExtraChildren] = useState<number>(0);
+  const [savingAttendance, setSavingAttendance] = useState(false);
   
   // Manual Check-in State
   const [showManual, setShowManual] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Guest[]>([]);
+  const [manualGuestsCache, setManualGuestsCache] = useState<Guest[]>([]);
+  const [manualGuestsLoaded, setManualGuestsLoaded] = useState(false);
   
   const volunteerName = sessionStorage.getItem('volunteer_name') || 'Unknown Volunteer';
+
+  useEffect(() => {
+    const a = typeof scannedGuest?.extraAdults === 'number' ? scannedGuest!.extraAdults! : 0;
+    const c = typeof scannedGuest?.extraChildren === 'number' ? scannedGuest!.extraChildren! : 0;
+    setExtraAdults(a);
+    setExtraChildren(c);
+  }, [scannedGuest?.id]);
 
   useEffect(() => {
     if (eventId) {
@@ -48,11 +62,55 @@ export const Scanner: React.FC = () => {
     }
   }, [eventId, volunteerName]);
 
+  useEffect(() => {
+    if (!showManual || !eventId) return;
+    if (manualGuestsLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const all = await getEventGuests(eventId);
+        if (!cancelled) {
+          setManualGuestsCache(all);
+          setManualGuestsLoaded(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setManualGuestsCache([]);
+          setManualGuestsLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showManual, eventId, manualGuestsLoaded]);
+
   const updateStats = async () => {
       if (eventId) {
         const s = await getEventStats(eventId);
         setStats({ total: s.total, checkedIn: s.checkedIn });
+        setAttendeesCheckedIn((s as any).attendeesCheckedIn ?? s.checkedIn);
       }
+  };
+
+  const ensureAttendanceDefaults = async (guest: Guest) => {
+    const hasAdults = typeof guest.extraAdults === 'number';
+    const hasChildren = typeof guest.extraChildren === 'number';
+    const hasTotal = typeof guest.totalAttendees === 'number';
+    if (hasAdults && hasChildren && hasTotal) return;
+
+    const adults = hasAdults ? Math.max(0, Math.trunc(guest.extraAdults as number)) : 0;
+    const children = hasChildren ? Math.max(0, Math.trunc(guest.extraChildren as number)) : 0;
+    const totalAttendees = hasTotal ? (guest.totalAttendees as number) : (1 + adults + children);
+    try {
+      await updateGuest(guest.id, {
+        extraAdults: adults,
+        extraChildren: children,
+        totalAttendees,
+      });
+    } catch (e) {
+      // best-effort; avoid blocking scanning
+    }
   };
 
   const playSound = (type: 'success' | 'error') => {
@@ -91,13 +149,15 @@ export const Scanner: React.FC = () => {
         setScanStatus('already_checked');
         setMessage(`Already checked in at ${new Date(guest.checkedInAt!).toLocaleTimeString()}`);
         setScannedGuest(guest);
+        await ensureAttendanceDefaults(guest);
         playSound('error');
     } else {
         try {
-            await checkInGuest(guest.id, volunteerName);
+            const checked = await checkInGuest(guest.id, volunteerName);
             setScanStatus('success');
             setMessage('Check-in Successful!');
-            setScannedGuest({...guest, checkedIn: true, checkedInAt: new Date().toISOString()});
+            setScannedGuest(checked);
+            await ensureAttendanceDefaults(checked);
             await updateStats();
             playSound('success');
         } catch (e) {
@@ -114,7 +174,7 @@ export const Scanner: React.FC = () => {
     if (decodedText === lastScanned) return; 
     setLastScanned(decodedText);
     
-    const guest = await getGuestByQRCode(decodedText);
+    const guest = await getGuestByQRCode(decodedText, eventId);
 
     if (!guest) {
         setScanStatus('error');
@@ -136,19 +196,19 @@ export const Scanner: React.FC = () => {
     processCheckIn(guest);
   };
 
-  const handleManualSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const query = e.target.value;
-      setSearchQuery(query);
-      if (query.length > 2 && eventId) {
-          const allGuests = await getEventGuests(eventId);
-          const results = allGuests.filter(g => 
-              g.name.toLowerCase().includes(query.toLowerCase()) || 
-              g.email.toLowerCase().includes(query.toLowerCase())
-          );
-          setSearchResults(results);
-      } else {
-          setSearchResults([]);
-      }
+  const handleManualSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value;
+    setSearchQuery(query);
+    if (query.length > 2) {
+      const q = query.toLowerCase();
+      const results = manualGuestsCache.filter(g =>
+        g.name.toLowerCase().includes(q) ||
+        g.email.toLowerCase().includes(q)
+      );
+      setSearchResults(results);
+    } else {
+      setSearchResults([]);
+    }
   };
 
   const handlePrint = async (g?: Guest | null) => {
@@ -165,6 +225,28 @@ export const Scanner: React.FC = () => {
     setScannedGuest(null);
     setScanStatus('idle');
     setMessage('');
+    setExtraAdults(0);
+    setExtraChildren(0);
+    setSavingAttendance(false);
+  };
+
+  const saveAttendance = async () => {
+    if (!scannedGuest) return;
+    const adults = Number.isFinite(extraAdults) ? Math.max(0, Math.trunc(extraAdults)) : 0;
+    const children = Number.isFinite(extraChildren) ? Math.max(0, Math.trunc(extraChildren)) : 0;
+    const totalAttendees = 1 + adults + children;
+
+    setSavingAttendance(true);
+    try {
+      await updateGuest(scannedGuest.id, {
+        extraAdults: adults,
+        extraChildren: children,
+        totalAttendees,
+      });
+      setScannedGuest(prev => prev ? ({ ...prev, extraAdults: adults, extraChildren: children, totalAttendees }) : prev);
+    } finally {
+      setSavingAttendance(false);
+    }
   };
 
   const handleExit = () => {
@@ -194,6 +276,7 @@ export const Scanner: React.FC = () => {
                 <BarChart size={12} /> Progress
             </div>
             <span className="text-white font-bold text-sm">{stats.checkedIn}</span> / {stats.total}
+            <div className="text-[10px] text-slate-500">Attendees: <span className="text-slate-200 font-semibold">{attendeesCheckedIn}</span></div>
         </div>
       </div>
 
@@ -269,18 +352,60 @@ export const Scanner: React.FC = () => {
                 
                 <div className="p-6 text-center">
                     <h3 className="text-2xl font-bold mb-1">{scannedGuest.name}</h3>
-                    <p className="text-slate-400 mb-6">{scannedGuest.email}</p>
+                    <div className="text-slate-400 mb-6 space-y-1">
+                        <div>{scannedGuest.email}</div>
+                        {scannedGuest.phone ? <div>{scannedGuest.phone}</div> : null}
+                        {scannedGuest.ticketCode ? <div className="text-slate-500 text-sm">Ticket: {scannedGuest.ticketCode}</div> : null}
+                    </div>
                     
-                    {scannedGuest.customData && Object.values(scannedGuest.customData)[0] && (
-                        <div className="bg-slate-700/50 rounded-lg p-3 mb-6 inline-block px-6">
-                            <span className="text-indigo-400 font-bold uppercase tracking-wider text-xs block mb-1">
-                                {Object.keys(scannedGuest.customData)[0]}
-                            </span>
-                            <span className="text-lg font-medium">{Object.values(scannedGuest.customData)[0]}</span>
-                        </div>
+                    {scannedGuest.customData && Object.keys(scannedGuest.customData).length > 0 && (
+                      <div className="bg-slate-700/50 rounded-xl p-4 mb-6 text-left">
+                        {Object.entries(scannedGuest.customData).map(([k, v]) => (
+                          <div key={k} className="flex items-center justify-between py-1">
+                            <span className="text-indigo-300 font-bold uppercase tracking-wider text-[10px]">{k}</span>
+                            <span className="text-sm text-white">{String(v || '')}</span>
+                          </div>
+                        ))}
+                      </div>
                     )}
 
+                    <div className="bg-slate-900/40 border border-slate-700 rounded-xl p-4 mb-6 text-left">
+                      <div className="text-xs text-slate-400 mb-3">Additional attendees with this guest</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Extra Adults</label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={extraAdults}
+                            onChange={(e) => setExtraAdults(Number(e.target.value || 0))}
+                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Extra Children</label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={extraChildren}
+                            onChange={(e) => setExtraChildren(Number(e.target.value || 0))}
+                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-3 text-xs text-slate-400">
+                        Total attendees (including this guest): <span className="text-white font-bold">{1 + (Number(extraAdults) || 0) + (Number(extraChildren) || 0)}</span>
+                      </div>
+                    </div>
+                    
                     <div className="grid grid-cols-1 gap-3">
+                        <button
+                            onClick={saveAttendance}
+                            disabled={savingAttendance}
+                            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 disabled:cursor-wait text-white py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
+                        >
+                            {savingAttendance ? 'Saving...' : 'Save Attendance'}
+                        </button>
                         <button 
                             onClick={resetScan}
                             className="bg-slate-700 hover:bg-slate-600 text-white py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
