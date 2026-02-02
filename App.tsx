@@ -8,6 +8,7 @@ import { EventDetails } from './pages/EventDetails';
 import { VolunteerLogin } from './pages/VolunteerLogin';
 import { Scanner } from './pages/Scanner';
 import { PublicRegistration } from './pages/PublicRegistration';
+import { SpotEntry } from './pages/SpotEntry';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ToastProvider } from './components/Toast';
 
@@ -21,6 +22,9 @@ interface ErrorBoundaryState {
 }
 
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public props: ErrorBoundaryProps;
+  public state: ErrorBoundaryState;
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -87,6 +91,7 @@ const App: React.FC = () => {
             <Route path="/volunteer-login" element={<VolunteerLogin />} />
             <Route path="/volunteer/:eventId/scan" element={<Scanner />} />
             <Route path="/register/:eventId" element={<PublicRegistration />} />
+            <Route path="/spot-entry/:eventId" element={<SpotEntry />} />
             
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

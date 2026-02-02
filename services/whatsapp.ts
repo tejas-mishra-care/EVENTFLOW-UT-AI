@@ -9,6 +9,33 @@ export interface WhatsAppConfig {
   businessAccountId?: string;
 }
 
+const normalizePhoneNumber = (raw: string): { ok: true; value: string } | { ok: false; error: string } => {
+  const s = String(raw || '').trim();
+  if (!s) return { ok: false, error: 'Missing phone number' };
+
+  // Keep leading + if present, strip everything else to digits
+  const hasPlus = s.startsWith('+');
+  const digits = s.replace(/[^0-9]/g, '');
+  if (!digits) return { ok: false, error: 'Invalid phone number' };
+
+  // If user already provided E.164, keep it
+  if (hasPlus) {
+    if (digits.length < 8 || digits.length > 15) return { ok: false, error: 'Invalid E.164 phone number' };
+    return { ok: true, value: `+${digits}` };
+  }
+
+  // Heuristic default: if 10 digits, assume India (+91). Otherwise treat as missing country code.
+  if (digits.length === 10) {
+    return { ok: true, value: `+91${digits}` };
+  }
+
+  if (digits.length >= 8 && digits.length <= 15) {
+    return { ok: true, value: `+${digits}` };
+  }
+
+  return { ok: false, error: 'Phone number must include country code (e.g. +91...)' };
+};
+
 export const getWhatsAppConfig = async (userId: string): Promise<WhatsAppConfig | null> => {
   try {
     const configRef = doc(db, 'whatsappSettings', userId);
@@ -46,23 +73,14 @@ export const sendWhatsAppInvite = async (
   options?: { eventId?: string; guestId?: string }
 ): Promise<{ success: boolean; message: string }> => {
   try {
-    if (!to || !to.trim()) {
-      return { success: false, message: 'Missing phone number' };
+    const normalized = normalizePhoneNumber(to);
+    if ('error' in normalized) {
+      return { success: false, message: normalized.error };
     }
 
     const config = await getWhatsAppConfig(userId);
 
     if (!config || config.provider === 'none') {
-      await addDoc(collection(db, 'pendingWhatsApps'), {
-        to,
-        userId,
-        createdAt: new Date().toISOString(),
-        status: 'pending_config',
-        message: 'WhatsApp queued - please configure WhatsApp service in settings',
-        eventId: options?.eventId || null,
-        guestId: options?.guestId || null,
-      });
-
       return {
         success: false,
         message: 'WhatsApp service not configured. Please set up WhatsApp in Event Settings.',
@@ -77,8 +95,11 @@ export const sendWhatsAppInvite = async (
         };
       }
 
+      const params = [guestName, eventName, ticketCode].map((v) => String(v ?? '').trim());
+
       await addDoc(collection(db, 'queuedWhatsApps'), {
-        to: to.trim(),
+        to: normalized.value,
+        originalTo: String(to || ''),
         userId,
         provider: 'meta',
         createdAt: new Date().toISOString(),
@@ -86,7 +107,7 @@ export const sendWhatsAppInvite = async (
         retries: 0,
         templateName: 'event_invite_v1',
         languageCode: 'en',
-        parameters: [guestName, eventName, ticketCode],
+        parameters: params,
         eventId: options?.eventId || null,
         guestId: options?.guestId || null,
       });

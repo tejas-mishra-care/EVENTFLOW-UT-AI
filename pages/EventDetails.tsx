@@ -67,6 +67,7 @@ export const EventDetails: React.FC = () => {
   const [volunteerStats, setVolunteerStats] = useState<Record<string, number>>({});
   const [activeVolunteers, setActiveVolunteers] = useState<string[]>([]);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [qrModalMode, setQrModalMode] = useState<'register' | 'spot'>('register');
 
   // Delivery / Queue Logs
   const [logs, setLogs] = useState({
@@ -77,6 +78,9 @@ export const EventDetails: React.FC = () => {
     sentWhatsApps: [] as any[],
     failedWhatsApps: [] as any[],
   });
+
+  const [logChannelFilter, setLogChannelFilter] = useState<'all' | 'whatsapp' | 'email'>('whatsapp');
+  const [logSearch, setLogSearch] = useState('');
   
   // Email Settings Modal
   const [showEmailSettings, setShowEmailSettings] = useState(false);
@@ -215,6 +219,100 @@ export const EventDetails: React.FC = () => {
       return new Date(c).toLocaleString();
     } catch {
       return '';
+    }
+  };
+
+  const getLogMs = (row: any) => {
+    const c = row?.createdAt;
+    if (!c) return 0;
+    try {
+      if (typeof c?.toMillis === 'function') return c.toMillis();
+      if (typeof c?.toDate === 'function') return c.toDate().getTime();
+      return new Date(c).getTime();
+    } catch {
+      return 0;
+    }
+  };
+
+  const getGuestById = (guestId: any): Guest | null => {
+    if (!guestId) return null;
+    const gid = String(guestId);
+    return guests.find(g => g.id === gid) || null;
+  };
+
+  const logMatchesSearch = (row: any) => {
+    const q = String(logSearch || '').trim().toLowerCase();
+    if (!q) return true;
+    const g = getGuestById(row?.guestId);
+    const hay = [
+      row?.to,
+      row?.originalTo,
+      row?.subject,
+      row?.templateName,
+      row?.status,
+      row?.error,
+      row?.reason,
+      row?.messageId,
+      row?.queuedId,
+      row?.guestId,
+      row?.eventId,
+      g?.name,
+      g?.email,
+      g?.phone,
+    ]
+      .map(v => String(v ?? '').toLowerCase())
+      .join(' ');
+    return hay.includes(q);
+  };
+
+  const sortLogsNewestFirst = (arr: any[]) => {
+    return [...arr].sort((a, b) => getLogMs(b) - getLogMs(a));
+  };
+
+  const copyText = async (value: string, successMsg: string) => {
+    const v = String(value || '').trim();
+    if (!v) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(v);
+        addToast(successMsg, 'success');
+        return;
+      }
+      throw new Error('Clipboard API not available');
+    } catch {
+      try {
+        const input = document.createElement('textarea');
+        input.value = v;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+        addToast(successMsg, 'success');
+      } catch {
+        addToast('Could not copy. Please copy manually.', 'warning');
+      }
+    }
+  };
+
+  const copySpotEntryLink = () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(getSpotEntryLink()).then(() => {
+          addToast("Spot entry link copied!", 'success');
+        }).catch(() => {
+          const input = document.createElement('textarea');
+          input.value = getSpotEntryLink();
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand('copy');
+          document.body.removeChild(input);
+          addToast("Spot entry link copied!", 'success');
+        });
+      } else {
+        throw new Error('Clipboard API not available');
+      }
+    } catch (e) {
+      addToast("Could not copy link. Please copy manually: " + getSpotEntryLink(), 'warning');
     }
   };
 
@@ -365,9 +463,12 @@ export const EventDetails: React.FC = () => {
 
     const guestsToInvite = guests.filter(g => {
       const emailSent = !!((g.inviteSentEmail ?? g.inviteSent) || false);
-      const waSent = !!(g.inviteSentWhatsApp || false);
+      const waStatus = (g as any).inviteWhatsAppStatus as (Guest['inviteWhatsAppStatus'] | undefined);
+      const waInFlight = waStatus === 'queued' || waStatus === 'sending';
+      const waSent = waStatus === 'sent' || !!(g.inviteSentWhatsApp || false);
+      const waAlreadyAttempted = waInFlight || waSent;
       if (inviteChannel === 'email') return !emailSent;
-      if (inviteChannel === 'whatsapp') return !waSent;
+      if (inviteChannel === 'whatsapp') return !waAlreadyAttempted;
       return !emailSent || !waSent;
     });
     
@@ -385,10 +486,12 @@ export const EventDetails: React.FC = () => {
         for (const guest of guestsToInvite) {
             if (user) {
                 const emailAlreadySent = !!((guest.inviteSentEmail ?? guest.inviteSent) || false);
-                const waAlreadySent = !!(guest.inviteSentWhatsApp || false);
+                const waStatus = (guest as any).inviteWhatsAppStatus as (Guest['inviteWhatsAppStatus'] | undefined);
+                const waInFlight = waStatus === 'queued' || waStatus === 'sending';
+                const waAlreadySent = waStatus === 'sent' || !!(guest.inviteSentWhatsApp || false);
 
                 const shouldSendEmail = (inviteChannel === 'email' || inviteChannel === 'both') && !emailAlreadySent;
-                const shouldSendWhatsApp = (inviteChannel === 'whatsapp' || inviteChannel === 'both') && !waAlreadySent;
+                const shouldSendWhatsApp = (inviteChannel === 'whatsapp' || inviteChannel === 'both') && !waInFlight && !waAlreadySent;
 
                 const updates: Partial<Guest> = {};
                 let invitedAny = false;
@@ -414,8 +517,8 @@ export const EventDetails: React.FC = () => {
                     { eventId: event.id, guestId: guest.id }
                   );
                   if (waRes.success) {
-                    updates.inviteSentWhatsApp = true;
-                    invitedAny = true;
+                    (updates as any).inviteWhatsAppStatus = 'queued';
+                    (updates as any).inviteWhatsAppQueuedAt = new Date().toISOString();
                   } else {
                     console.warn('WhatsApp not sent for', guest.phone, waRes.message);
                   }
@@ -780,6 +883,13 @@ export const EventDetails: React.FC = () => {
     return `${cleanBaseUrl}/#/register/${event.id}`;
   };
 
+  const getSpotEntryLink = () => {
+    if (!event?.id) return '';
+    const baseUrl = window.location.href.split('#')[0];
+    const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    return `${cleanBaseUrl}/#/spot-entry/${event.id}`;
+  };
+
   const copyRegistrationLink = () => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -832,12 +942,12 @@ export const EventDetails: React.FC = () => {
                 <button onClick={() => setShowQrModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
                     <X size={24} />
                 </button>
-                <h3 className="text-xl font-bold text-slate-900 mb-2">Scan to Register</h3>
-                <p className="text-slate-500 mb-6">Guests can scan this to open the registration form.</p>
-                {isValidQRValue(getRegistrationLink()) ? (
+                <h3 className="text-xl font-bold text-slate-900 mb-2">{qrModalMode === 'spot' ? 'Spot Entry' : 'Scan to Register'}</h3>
+                <p className="text-slate-500 mb-6">{qrModalMode === 'spot' ? 'Guests can scan this at the entrance for instant check-in.' : 'Guests can scan this to open the registration form.'}</p>
+                {isValidQRValue(qrModalMode === 'spot' ? getSpotEntryLink() : getRegistrationLink()) ? (
                   <div className="bg-white p-4 rounded-xl border border-slate-200 inline-block mb-4 shadow-sm">
                     {/* Ensure QR code uses absolute URL */}
-                    <SafeQRCode value={getRegistrationLink()} size={200} />
+                    <SafeQRCode value={qrModalMode === 'spot' ? getSpotEntryLink() : getRegistrationLink()} size={200} />
                   </div>
                 ) : (
                   <div className="bg-slate-100 p-4 rounded-xl border border-slate-200 inline-block mb-4 text-slate-500 text-sm">
@@ -845,9 +955,9 @@ export const EventDetails: React.FC = () => {
                   </div>
                 )}
                 <div className="flex gap-2 justify-center">
-                    <button onClick={copyRegistrationLink} className="text-indigo-600 text-sm font-medium hover:underline">Copy Link</button>
+                    <button onClick={qrModalMode === 'spot' ? copySpotEntryLink : copyRegistrationLink} className="text-indigo-600 text-sm font-medium hover:underline">Copy Link</button>
                     <span className="text-slate-300">|</span>
-                    <button onClick={() => window.open(getRegistrationLink(), '_blank')} className="text-indigo-600 text-sm font-medium hover:underline">Open Form</button>
+                    <button onClick={() => window.open(qrModalMode === 'spot' ? getSpotEntryLink() : getRegistrationLink(), '_blank')} className="text-indigo-600 text-sm font-medium hover:underline">{qrModalMode === 'spot' ? 'Open Spot Entry' : 'Open Form'}</button>
                 </div>
             </div>
         </div>
@@ -869,10 +979,16 @@ export const EventDetails: React.FC = () => {
             </div>
             <div className="flex gap-3">
                  <button 
-                    onClick={() => setShowQrModal(true)}
+                    onClick={() => { setQrModalMode('register'); setShowQrModal(true); }}
                     className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white border border-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
                  >
                     <QrCode size={16} /> Show QR
+                 </button>
+                 <button 
+                    onClick={() => { setQrModalMode('spot'); setShowQrModal(true); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white border border-green-600 rounded-lg hover:bg-green-700 transition-colors shadow-sm"
+                 >
+                    <QrCode size={16} /> Spot Entry QR
                  </button>
                  <button 
                     onClick={copyRegistrationLink}
@@ -881,10 +997,22 @@ export const EventDetails: React.FC = () => {
                     <Copy size={16} /> Copy Reg. Link
                  </button>
                  <button 
+                    onClick={copySpotEntryLink}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
+                 >
+                    <Copy size={16} /> Copy Spot Link
+                 </button>
+                 <button 
                     onClick={() => window.open(getRegistrationLink(), '_blank')}
                     className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
                  >
                     <ExternalLink size={16} /> Open Form
+                 </button>
+                 <button 
+                    onClick={() => window.open(getSpotEntryLink(), '_blank')}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
+                 >
+                    <ExternalLink size={16} /> Open Spot
                  </button>
             </div>
         </div>
@@ -1090,13 +1218,24 @@ export const EventDetails: React.FC = () => {
 
                             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                                 <span className="text-sm text-slate-500">Invite Status</span>
-                                {(selectedGuest.inviteSentEmail || selectedGuest.inviteSentWhatsApp || selectedGuest.inviteSent) ? (
-                                    <span className="text-green-600 font-bold text-sm flex items-center gap-1">
-                                        <Mail size={14} /> Sent
-                                    </span>
-                                ) : (
-                                    <span className="text-slate-400 font-bold text-sm">Not Sent</span>
-                                )}
+                                {(() => {
+                                  const waStatus = (selectedGuest as any).inviteWhatsAppStatus as (Guest['inviteWhatsAppStatus'] | undefined);
+                                  const emailSent = !!((selectedGuest.inviteSentEmail ?? selectedGuest.inviteSent) || false);
+                                  const waSent = waStatus === 'sent' || !!selectedGuest.inviteSentWhatsApp;
+                                  const waQueued = waStatus === 'queued' || waStatus === 'sending';
+                                  const waFailed = waStatus === 'failed';
+
+                                  if (waFailed) {
+                                    return <span className="text-red-600 font-bold text-sm flex items-center gap-1"><MessageCircle size={14} /> Failed</span>;
+                                  }
+                                  if (waQueued) {
+                                    return <span className="text-amber-600 font-bold text-sm flex items-center gap-1"><MessageCircle size={14} /> Queued</span>;
+                                  }
+                                  if (emailSent || waSent) {
+                                    return <span className="text-green-600 font-bold text-sm flex items-center gap-1"><Mail size={14} /> Sent</span>;
+                                  }
+                                  return <span className="text-slate-400 font-bold text-sm">Not Sent</span>;
+                                })()}
                             </div>
                             
                             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
@@ -1143,7 +1282,22 @@ export const EventDetails: React.FC = () => {
                                     <div className="font-medium">{((selectedGuest.inviteSentEmail ?? selectedGuest.inviteSent) ? 'Yes' : 'No')}</div>
 
                                     <div className="text-slate-500">Invite WhatsApp:</div>
-                                    <div className="font-medium">{(selectedGuest.inviteSentWhatsApp ? 'Yes' : 'No')}</div>
+                                    <div className="font-medium">
+                                      {(() => {
+                                        const waStatus = (selectedGuest as any).inviteWhatsAppStatus as (Guest['inviteWhatsAppStatus'] | undefined);
+                                        if (waStatus === 'queued') return 'Queued';
+                                        if (waStatus === 'sending') return 'Sending';
+                                        if (waStatus === 'sent' || selectedGuest.inviteSentWhatsApp) return 'Sent';
+                                        if (waStatus === 'failed') return 'Failed';
+                                        return 'No';
+                                      })()}
+                                    </div>
+
+                                    <div className="text-slate-500">WhatsApp Message ID:</div>
+                                    <div className="font-medium font-mono text-xs break-all">{(selectedGuest as any).inviteWhatsAppMessageId || '-'}</div>
+
+                                    <div className="text-slate-500">WhatsApp Last Error:</div>
+                                    <div className="font-medium text-xs break-words">{(selectedGuest as any).inviteWhatsAppLastError || '-'}</div>
 
                                     <div className="text-slate-500">Extra Adults:</div>
                                     <div className="font-medium">{(selectedGuest as any).extraAdults ?? 0}</div>
@@ -1350,11 +1504,24 @@ export const EventDetails: React.FC = () => {
                                             )}
                                         </td>
                                         <td className="px-4 py-3">
-                                            {(guest.inviteSentEmail || guest.inviteSentWhatsApp || guest.inviteSent) ? (
-                                                <span className="text-xs text-green-600 font-medium flex items-center gap-1"><Mail size={12}/> Sent</span>
-                                            ) : (
-                                                <span className="text-xs text-slate-400">Not sent</span>
-                                            )}
+                                            {(() => {
+                                              const waStatus = (guest as any).inviteWhatsAppStatus as (Guest['inviteWhatsAppStatus'] | undefined);
+                                              const emailSent = !!((guest.inviteSentEmail ?? guest.inviteSent) || false);
+                                              const waSent = waStatus === 'sent' || !!guest.inviteSentWhatsApp;
+                                              const waQueued = waStatus === 'queued' || waStatus === 'sending';
+                                              const waFailed = waStatus === 'failed';
+
+                                              if (waFailed) {
+                                                return <span className="text-xs text-red-600 font-medium flex items-center gap-1"><MessageCircle size={12}/> Failed</span>;
+                                              }
+                                              if (waQueued) {
+                                                return <span className="text-xs text-amber-600 font-medium flex items-center gap-1"><MessageCircle size={12}/> Queued</span>;
+                                              }
+                                              if (emailSent || waSent) {
+                                                return <span className="text-xs text-green-600 font-medium flex items-center gap-1"><Mail size={12}/> Sent</span>;
+                                              }
+                                              return <span className="text-xs text-slate-400">Not sent</span>;
+                                            })()}
                                         </td>
                                         <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                                             {/* Small QR Preview */}
@@ -1583,83 +1750,235 @@ export const EventDetails: React.FC = () => {
 
             {activeTab === 'logs' && (
                 <div className="max-w-5xl mx-auto">
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 mb-6">
+                    <div className="flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setLogChannelFilter('whatsapp')}
+                          className={`px-3 py-2 rounded-lg border text-sm font-semibold ${logChannelFilter === 'whatsapp' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                        >
+                          WhatsApp
+                        </button>
+                        <button
+                          onClick={() => setLogChannelFilter('email')}
+                          className={`px-3 py-2 rounded-lg border text-sm font-semibold ${logChannelFilter === 'email' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                        >
+                          Email
+                        </button>
+                        <button
+                          onClick={() => setLogChannelFilter('all')}
+                          className={`px-3 py-2 rounded-lg border text-sm font-semibold ${logChannelFilter === 'all' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                        >
+                          All
+                        </button>
+                      </div>
+
+                      <div className="relative w-full lg:w-96">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          type="text"
+                          placeholder="Search logs (phone, guest, message id, error...)"
+                          className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                          value={logSearch}
+                          onChange={(e) => setLogSearch(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {(logChannelFilter === 'all' || logChannelFilter === 'email') && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued Emails</div>
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued Emails ({sortLogsNewestFirst(logs.queuedEmails).filter(logMatchesSearch).length})</div>
                       <div className="divide-y divide-slate-100">
-                        {logs.queuedEmails.length ? logs.queuedEmails.map((r: any) => (
+                        {sortLogsNewestFirst(logs.queuedEmails).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.queuedEmails).filter(logMatchesSearch).map((r: any) => (
                           <div key={r.id} className="p-4 text-sm">
                             <div className="font-medium text-slate-900">{r.to}</div>
                             <div className="text-xs text-slate-500">{r.subject || ''}</div>
                             <div className="text-xs text-slate-400">{getLogTime(r)} {r.status ? `• ${r.status}` : ''}</div>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => copyText(String(r.to || ''), 'Copied recipient')}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                              >
+                                <Copy size={14} /> Copy To
+                              </button>
+                            </div>
                           </div>
                         )) : <div className="p-6 text-sm text-slate-500">No queued emails</div>}
                       </div>
                     </div>
+                    )}
 
+                    {(logChannelFilter === 'all' || logChannelFilter === 'email') && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent Emails</div>
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent Emails ({sortLogsNewestFirst(logs.sentEmails).filter(logMatchesSearch).length})</div>
                       <div className="divide-y divide-slate-100">
-                        {logs.sentEmails.length ? logs.sentEmails.map((r: any) => (
+                        {sortLogsNewestFirst(logs.sentEmails).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.sentEmails).filter(logMatchesSearch).map((r: any) => (
                           <div key={r.id} className="p-4 text-sm">
                             <div className="font-medium text-slate-900">{r.to}</div>
                             <div className="text-xs text-slate-500">{r.subject || ''}</div>
                             <div className="text-xs text-slate-400">{getLogTime(r)} {typeof r.responseStatus === 'number' ? `• ${r.responseStatus}` : ''}</div>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => copyText(String(r.to || ''), 'Copied recipient')}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                              >
+                                <Copy size={14} /> Copy To
+                              </button>
+                            </div>
                           </div>
                         )) : <div className="p-6 text-sm text-slate-500">No sent emails</div>}
                       </div>
                     </div>
+                    )}
 
+                    {(logChannelFilter === 'all' || logChannelFilter === 'email') && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed Emails</div>
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed Emails ({sortLogsNewestFirst(logs.failedEmails).filter(logMatchesSearch).length})</div>
                       <div className="divide-y divide-slate-100">
-                        {logs.failedEmails.length ? logs.failedEmails.map((r: any) => (
+                        {sortLogsNewestFirst(logs.failedEmails).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.failedEmails).filter(logMatchesSearch).map((r: any) => (
                           <div key={r.id} className="p-4 text-sm">
                             <div className="font-medium text-slate-900">{r.to}</div>
                             <div className="text-xs text-red-600">{r.error || r.reason || 'Failed'}</div>
                             <div className="text-xs text-slate-400">{getLogTime(r)}</div>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => copyText(String(r.to || ''), 'Copied recipient')}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                              >
+                                <Copy size={14} /> Copy To
+                              </button>
+                            </div>
                           </div>
                         )) : <div className="p-6 text-sm text-slate-500">No failed emails</div>}
                       </div>
                     </div>
+                    )}
 
+                    {(logChannelFilter === 'all' || logChannelFilter === 'whatsapp') && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued WhatsApps</div>
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued WhatsApps ({sortLogsNewestFirst(logs.queuedWhatsApps).filter(logMatchesSearch).length})</div>
                       <div className="divide-y divide-slate-100">
-                        {logs.queuedWhatsApps.length ? logs.queuedWhatsApps.map((r: any) => (
-                          <div key={r.id} className="p-4 text-sm">
-                            <div className="font-medium text-slate-900">{r.to}</div>
-                            <div className="text-xs text-slate-500">{r.templateName || 'template'}</div>
-                            <div className="text-xs text-slate-400">{getLogTime(r)} {r.status ? `• ${r.status}` : ''}</div>
-                          </div>
-                        )) : <div className="p-6 text-sm text-slate-500">No queued WhatsApps</div>}
+                        {sortLogsNewestFirst(logs.queuedWhatsApps).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.queuedWhatsApps).filter(logMatchesSearch).map((r: any) => {
+                          const g = getGuestById(r.guestId);
+                          return (
+                            <div key={r.id} className="p-4 text-sm">
+                              <div className="font-medium text-slate-900">{r.to}</div>
+                              {r.originalTo ? <div className="text-xs text-slate-500">Original: {r.originalTo}</div> : null}
+                              {g ? <div className="text-xs text-slate-500">Guest: {g.name}</div> : null}
+                              <div className="text-xs text-slate-500">{r.templateName || 'template'} {typeof r.retries === 'number' ? `• retries: ${r.retries}` : ''}</div>
+                              <div className="text-xs text-slate-400">{getLogTime(r)} {r.status ? `• ${r.status}` : ''}</div>
+                              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                <button
+                                  onClick={() => copyText(String(r.to || ''), 'Copied phone number')}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                >
+                                  <Copy size={14} /> Copy To
+                                </button>
+                                {r.originalTo ? (
+                                  <button
+                                    onClick={() => copyText(String(r.originalTo || ''), 'Copied original phone')}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                  >
+                                    <Copy size={14} /> Copy Original
+                                  </button>
+                                ) : null}
+                                {g ? (
+                                  <button
+                                    onClick={() => setSelectedGuest(g)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                  >
+                                    <Eye size={14} /> View Guest
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        }) : <div className="p-6 text-sm text-slate-500">No queued WhatsApps</div>}
                       </div>
                     </div>
+                    )}
 
+                    {(logChannelFilter === 'all' || logChannelFilter === 'whatsapp') && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent WhatsApps</div>
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent WhatsApps ({sortLogsNewestFirst(logs.sentWhatsApps).filter(logMatchesSearch).length})</div>
                       <div className="divide-y divide-slate-100">
-                        {logs.sentWhatsApps.length ? logs.sentWhatsApps.map((r: any) => (
-                          <div key={r.id} className="p-4 text-sm">
-                            <div className="font-medium text-slate-900">{r.to}</div>
-                            <div className="text-xs text-slate-400">{getLogTime(r)} {typeof r.responseStatus === 'number' ? `• ${r.responseStatus}` : ''}</div>
-                          </div>
-                        )) : <div className="p-6 text-sm text-slate-500">No sent WhatsApps</div>}
+                        {sortLogsNewestFirst(logs.sentWhatsApps).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.sentWhatsApps).filter(logMatchesSearch).map((r: any) => {
+                          const g = getGuestById(r.guestId);
+                          return (
+                            <div key={r.id} className="p-4 text-sm">
+                              <div className="font-medium text-slate-900">{r.to}</div>
+                              {r.originalTo ? <div className="text-xs text-slate-500">Original: {r.originalTo}</div> : null}
+                              {g ? <div className="text-xs text-slate-500">Guest: {g.name}</div> : null}
+                              {r.messageId ? <div className="text-xs text-slate-500">Message ID: {r.messageId}</div> : null}
+                              <div className="text-xs text-slate-400">{getLogTime(r)} {typeof r.responseStatus === 'number' ? `• ${r.responseStatus}` : ''}</div>
+                              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                <button
+                                  onClick={() => copyText(String(r.to || ''), 'Copied phone number')}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                >
+                                  <Copy size={14} /> Copy To
+                                </button>
+                                {r.messageId ? (
+                                  <button
+                                    onClick={() => copyText(String(r.messageId || ''), 'Copied message id')}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                  >
+                                    <Copy size={14} /> Copy Msg ID
+                                  </button>
+                                ) : null}
+                                {g ? (
+                                  <button
+                                    onClick={() => setSelectedGuest(g)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                  >
+                                    <Eye size={14} /> View Guest
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        }) : <div className="p-6 text-sm text-slate-500">No sent WhatsApps</div>}
                       </div>
                     </div>
+                    )}
 
+                    {(logChannelFilter === 'all' || logChannelFilter === 'whatsapp') && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed WhatsApps</div>
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed WhatsApps ({sortLogsNewestFirst(logs.failedWhatsApps).filter(logMatchesSearch).length})</div>
                       <div className="divide-y divide-slate-100">
-                        {logs.failedWhatsApps.length ? logs.failedWhatsApps.map((r: any) => (
-                          <div key={r.id} className="p-4 text-sm">
-                            <div className="font-medium text-slate-900">{r.to}</div>
-                            <div className="text-xs text-red-600">{r.error || r.reason || 'Failed'}</div>
-                            <div className="text-xs text-slate-400">{getLogTime(r)}</div>
-                          </div>
-                        )) : <div className="p-6 text-sm text-slate-500">No failed WhatsApps</div>}
+                        {sortLogsNewestFirst(logs.failedWhatsApps).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.failedWhatsApps).filter(logMatchesSearch).map((r: any) => {
+                          const g = getGuestById(r.guestId);
+                          return (
+                            <div key={r.id} className="p-4 text-sm">
+                              <div className="font-medium text-slate-900">{r.to}</div>
+                              {r.originalTo ? <div className="text-xs text-slate-500">Original: {r.originalTo}</div> : null}
+                              {g ? <div className="text-xs text-slate-500">Guest: {g.name}</div> : null}
+                              <div className="text-xs text-red-600">{r.error || r.reason || 'Failed'}</div>
+                              <div className="text-xs text-slate-400">{getLogTime(r)}</div>
+                              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                <button
+                                  onClick={() => copyText(String(r.to || ''), 'Copied phone number')}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                >
+                                  <Copy size={14} /> Copy To
+                                </button>
+                                {g ? (
+                                  <button
+                                    onClick={() => setSelectedGuest(g)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-slate-200 rounded-md hover:bg-slate-50"
+                                  >
+                                    <Eye size={14} /> View Guest
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        }) : <div className="p-6 text-sm text-slate-500">No failed WhatsApps</div>}
                       </div>
                     </div>
+                    )}
                   </div>
                 </div>
             )}

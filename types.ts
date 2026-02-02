@@ -53,6 +53,12 @@ export interface Guest {
   inviteSent?: boolean;
   inviteSentEmail?: boolean;
   inviteSentWhatsApp?: boolean;
+  inviteWhatsAppStatus?: 'none' | 'queued' | 'sending' | 'sent' | 'failed';
+  inviteWhatsAppQueuedAt?: string;
+  inviteWhatsAppSentAt?: string;
+  inviteWhatsAppFailedAt?: string;
+  inviteWhatsAppLastError?: string;
+  inviteWhatsAppMessageId?: string;
   extraAdults?: number;
   extraChildren?: number;
   totalAttendees?: number;

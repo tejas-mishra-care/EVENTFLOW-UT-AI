@@ -27,6 +27,7 @@ interface QueuedEmail {
 
  interface QueuedWhatsApp {
    to: string;
+   originalTo?: string;
    userId: string;
    provider?: string;
    templateName?: string;
@@ -42,6 +43,16 @@ const asNonNegativeInt = (v: unknown, fallback: number) => {
   const n = typeof v === 'number' ? v : Number(v);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(0, Math.trunc(n));
+};
+
+const normalizeE164 = (raw: unknown): { ok: true; value: string } | { ok: false; error: string } => {
+  const s = String(raw ?? '').trim();
+  if (!s) return { ok: false, error: 'Missing phone number' };
+  const digits = s.replace(/[^0-9]/g, '');
+  if (!digits) return { ok: false, error: 'Invalid phone number' };
+  const value = s.startsWith('+') ? `+${digits}` : `+${digits}`;
+  if (digits.length < 8 || digits.length > 15) return { ok: false, error: 'Invalid E.164 phone number' };
+  return { ok: true, value };
 };
 
 const getTotalAttendees = (g: any) => {
@@ -258,9 +269,25 @@ export const processQueuedEmail = functions.firestore
    .onCreate(async (snap, ctx) => {
      const data = snap.data() as QueuedWhatsApp;
      const docId = ctx.params.docId;
+
+     const normalizedTo = normalizeE164(data.to);
+     if (!normalizedTo.ok) {
+       await snap.ref.update({ status: 'failed', error: normalizedTo.error });
+       await db.collection('failedWhatsApps').add({
+         queuedId: docId,
+         to: String(data.to || ''),
+         originalTo: data.originalTo || null,
+         error: normalizedTo.error,
+         createdAt: admin.firestore.FieldValue.serverTimestamp(),
+         eventId: data.eventId || null,
+         guestId: data.guestId || null,
+       });
+       return;
+     }
+
      console.log('Processing queuedWhatsApp', {
        docId,
-       to: data.to,
+       to: normalizedTo.value,
        userId: data.userId,
        provider: data.provider,
        eventId: data.eventId || null,
@@ -282,6 +309,29 @@ export const processQueuedEmail = functions.firestore
        if (!locked) return;
      } catch (e) {
        return;
+     }
+
+     // If this invite is tied to a guest, avoid double-sending if already sent.
+     if (data.guestId) {
+       try {
+         const guestRef = db.collection('guests').doc(String(data.guestId));
+         const gs = await guestRef.get();
+         if (gs.exists) {
+           const g: any = gs.data() || {};
+           if (String(g.inviteWhatsAppStatus || '') === 'sent' || !!g.inviteSentWhatsApp) {
+             await snap.ref.update({ status: 'skipped', skippedAt: admin.firestore.FieldValue.serverTimestamp(), error: 'Already sent' });
+             return;
+           }
+           await guestRef.set(
+             {
+               inviteWhatsAppStatus: 'sending',
+             },
+             { merge: true }
+           );
+         }
+       } catch (e) {
+         // do not fail processing just because guest update failed
+       }
      }
 
      let cfgDoc: FirebaseFirestore.DocumentSnapshot | null = null;
@@ -314,7 +364,7 @@ export const processQueuedEmail = functions.firestore
 
        const payload = {
          messaging_product: 'whatsapp',
-         to: data.to,
+         to: normalizedTo.value,
          type: 'template',
          template: {
            name: templateName,
@@ -342,12 +392,16 @@ export const processQueuedEmail = functions.firestore
        let json: any = null;
        try { json = JSON.parse(text); } catch (e) { json = { raw: text }; }
 
+       const messageId = Array.isArray(json?.messages) && json.messages.length > 0 ? String(json.messages[0]?.id || '') : '';
+
        await db.collection('sentWhatsApps').add({
          queuedId: docId,
-         to: data.to,
+         to: normalizedTo.value,
+         originalTo: data.originalTo || null,
          provider: 'meta',
          responseStatus: resp.status,
          responseBody: json,
+         messageId: messageId || null,
          createdAt: admin.firestore.FieldValue.serverTimestamp(),
          eventId: data.eventId || null,
          guestId: data.guestId || null,
@@ -359,11 +413,30 @@ export const processQueuedEmail = functions.firestore
 
        await snap.ref.update({ status: 'sent', processedAt: admin.firestore.FieldValue.serverTimestamp() });
 
+       if (data.guestId) {
+         try {
+           await db.collection('guests').doc(String(data.guestId)).set(
+             {
+               inviteWhatsAppStatus: 'sent',
+               inviteWhatsAppSentAt: new Date().toISOString(),
+               inviteWhatsAppMessageId: messageId || null,
+               inviteWhatsAppLastError: null,
+               inviteSentWhatsApp: true,
+               inviteSent: true,
+             },
+             { merge: true }
+           );
+         } catch (e) {
+           // ignore
+         }
+       }
+
      } catch (err: any) {
        console.error('Failed to send queued WhatsApp', err);
        await db.collection('failedWhatsApps').add({
          queuedId: docId,
-         to: data.to,
+         to: normalizedTo.value,
+         originalTo: data.originalTo || null,
          error: err && err.message ? err.message : String(err),
          createdAt: admin.firestore.FieldValue.serverTimestamp(),
          eventId: data.eventId || null,
@@ -375,6 +448,21 @@ export const processQueuedEmail = functions.firestore
          error: err && err.message ? err.message : String(err),
          retries: prevRetries + 1,
        });
+
+       if (data.guestId) {
+         try {
+           await db.collection('guests').doc(String(data.guestId)).set(
+             {
+               inviteWhatsAppStatus: 'failed',
+               inviteWhatsAppFailedAt: new Date().toISOString(),
+               inviteWhatsAppLastError: err && err.message ? err.message : String(err),
+             },
+             { merge: true }
+           );
+         } catch (e) {
+           // ignore
+         }
+       }
      }
    });
 
