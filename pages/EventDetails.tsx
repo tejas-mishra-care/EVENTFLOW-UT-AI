@@ -199,6 +199,28 @@ export const EventDetails: React.FC = () => {
     };
   }, [id]);
 
+  useEffect(() => {
+    const styleId = 'eventflow-dynamic-print-style';
+    const existing = document.getElementById(styleId);
+    if (!event) {
+      if (existing && existing.parentElement) existing.parentElement.removeChild(existing);
+      return;
+    }
+
+    const pageW = typeof event.idCardPageWidthMm === 'number' ? event.idCardPageWidthMm : 58;
+    const pageH = typeof event.idCardPageHeightMm === 'number' ? event.idCardPageHeightMm : null;
+    const margin = typeof event.idCardPageMarginMm === 'number' ? event.idCardPageMarginMm : 0;
+
+    const css = `@media print {\n` +
+      `  @page { size: ${pageW}mm ${pageH != null ? `${pageH}mm` : 'auto'}; margin: ${margin}mm; }\n` +
+      `}`;
+
+    const el = (existing as HTMLStyleElement | null) || document.createElement('style');
+    el.id = styleId;
+    el.textContent = css;
+    if (!existing) document.head.appendChild(el);
+  }, [event?.idCardPageWidthMm, event?.idCardPageHeightMm, event?.idCardPageMarginMm, event]);
+
   // Reset printing state after browser print completes
   useEffect(() => {
     const onAfterPrint = () => setPrintingGuest(null);
@@ -601,9 +623,14 @@ export const EventDetails: React.FC = () => {
 
   const handlePrintBadge = async (guest: Guest) => {
       setPrintingGuest(guest);
-      await markGuestIdPrinted(guest.id);
-      if (selectedGuest && selectedGuest.id === guest.id) {
-          setSelectedGuest(prev => prev ? ({ ...prev, idCardPrinted: true }) : null);
+      const testMode = !!(event as any)?.idCardPrintTestMode;
+      if (!testMode) {
+        await markGuestIdPrinted(guest.id);
+        if (selectedGuest && selectedGuest.id === guest.id) {
+            setSelectedGuest(prev => prev ? ({ ...prev, idCardPrinted: true }) : null);
+        }
+      } else {
+        addToast('Print Test Mode: choose "Save as PDF" in the print dialog to download.', 'info');
       }
       setTimeout(() => {
           window.print();
@@ -745,6 +772,14 @@ export const EventDetails: React.FC = () => {
     } finally {
         setIsSaving(false);
     }
+  };
+
+  const setEditNumber = (key: keyof Event, raw: string) => {
+    const v = String(raw ?? '').trim();
+    setEditForm(prev => ({
+      ...prev,
+      [key]: v === '' ? undefined : Number(v),
+    }));
   };
 
   const addFormField = () => {
@@ -1322,22 +1357,25 @@ export const EventDetails: React.FC = () => {
 
                 {!isEditingGuest && (
                     <div className="p-6 bg-slate-50 border-t border-slate-200 grid grid-cols-2 gap-3">
-                         <button 
-                             onClick={() => handleResendSingleInvite(selectedGuest)}
-                             className="py-2 text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                         >
-                             <RotateCcw size={16} /> Resend Email
-                         </button>
-                         <button 
-                             onClick={() => handlePrintBadge(selectedGuest)}
-                             className={`py-2 text-white ${selectedGuest.idCardPrinted ? 'bg-indigo-800' : 'bg-indigo-600 hover:bg-indigo-700'} rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2`}
-                         >
-                             <Printer size={16} /> {selectedGuest.idCardPrinted ? 'Reprint Badge' : 'Print Badge'}
-                         </button>
-                         <button 
-                             onClick={() => {
-                                 downloadQrCode(selectedGuest.qrCode, selectedGuest.name);
-                             }}
+                         <div className="flex items-center gap-4">
+                             <button 
+                                 type="button"
+                                 onClick={() => handleResendSingleInvite(selectedGuest)}
+                                 className="py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300 transition-colors flex items-center justify-center gap-2"
+                             >
+                                  <RotateCcw size={16} /> Resend Email
+                             </button>
+                             <button 
+                                 onClick={() => handlePrintBadge(selectedGuest)}
+                                 className={`py-2 text-white ${selectedGuest.idCardPrinted ? 'bg-indigo-800' : 'bg-indigo-600 hover:bg-indigo-700'} rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2`}
+                             >
+                                  <Printer size={16} /> {(event as any)?.idCardPrintTestMode ? (selectedGuest.idCardPrinted ? 'Reprint (PDF)' : 'Print (PDF)') : (selectedGuest.idCardPrinted ? 'Reprint Badge' : 'Print Badge')}
+                             </button>
+                             <button 
+                                 onClick={() => {
+                                     setSelectedGuest(null);
+                                     setIsEditingGuest(false);
+                                 }}
                              className="py-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
                          >
                              <Download size={16} /> Save QR
@@ -1352,6 +1390,7 @@ export const EventDetails: React.FC = () => {
                          >
                              <Trash2 size={16} /> Delete
                          </button>
+                    </div>
                     </div>
                 )}
             </div>
@@ -2092,6 +2131,123 @@ export const EventDetails: React.FC = () => {
                                         />
                                     </div>
                                 </div>
+                            </div>
+
+                            <div className="mt-6 p-4 bg-white border border-slate-200 rounded-lg">
+                              <div className="flex items-center justify-between gap-4">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-900">Print Test Mode (PDF)</div>
+                                  <div className="text-xs text-slate-500">When enabled, printing uses the same flow, but you can save as PDF in the print dialog (no physical printer required).</div>
+                                </div>
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!(editForm as any).idCardPrintTestMode}
+                                    onChange={e => setEditForm({ ...editForm, idCardPrintTestMode: e.target.checked })}
+                                    className="w-4 h-4 border border-slate-300 rounded"
+                                  />
+                                  <span className="text-sm text-slate-700">Enable</span>
+                                </label>
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Page Width (mm)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardPageWidthMm ?? ''}
+                                    onChange={e => setEditNumber('idCardPageWidthMm', e.target.value)}
+                                    placeholder="58"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Page Height (mm)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardPageHeightMm ?? ''}
+                                    onChange={e => setEditNumber('idCardPageHeightMm', e.target.value)}
+                                    placeholder="(blank = auto)"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Page Margin (mm)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardPageMarginMm ?? ''}
+                                    onChange={e => setEditNumber('idCardPageMarginMm', e.target.value)}
+                                    placeholder="0"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Badge Width (mm)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardPrintWidthMm ?? ''}
+                                    onChange={e => setEditNumber('idCardPrintWidthMm', e.target.value)}
+                                    placeholder="58"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Badge Height (mm)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardPrintHeightMm ?? ''}
+                                    onChange={e => setEditNumber('idCardPrintHeightMm', e.target.value)}
+                                    placeholder="(optional)"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Border (mm)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardBorderMm ?? ''}
+                                    onChange={e => setEditNumber('idCardBorderMm', e.target.value)}
+                                    placeholder="0.5"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Logo Size (px)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardLogoPx ?? ''}
+                                    onChange={e => setEditNumber('idCardLogoPx', e.target.value)}
+                                    placeholder="64"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">QR Size (px)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardQrPx ?? ''}
+                                    onChange={e => setEditNumber('idCardQrPx', e.target.value)}
+                                    placeholder="80"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-slate-700 mb-1">Name Font (px)</label>
+                                  <input
+                                    type="number"
+                                    value={(editForm as any).idCardNameFontPx ?? ''}
+                                    onChange={e => setEditNumber('idCardNameFontPx', e.target.value)}
+                                    placeholder="32"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="mt-3 text-xs text-slate-500">
+                                For full control (positions, borders, WhatsApp/Mail branding, etc.), use the ID Card Template (HTML) below.
+                              </div>
                             </div>
                         </div>
                         

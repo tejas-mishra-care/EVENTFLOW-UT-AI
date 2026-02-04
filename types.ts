@@ -37,6 +37,18 @@ export interface Event {
   autoPrintOnScan?: boolean; // Auto print ID card after successful scan
   idCardShowEmail?: boolean; // Show guest email on badge
   idCardShowEventDate?: boolean; // Show event date on badge
+
+  // Thermal / ID card print tuning (optional)
+  idCardPrintTestMode?: boolean; // If true, printing is intended for Save-as-PDF testing
+  idCardPageWidthMm?: number; // @page width (mm)
+  idCardPageHeightMm?: number; // @page height (mm). If omitted, uses auto
+  idCardPageMarginMm?: number; // @page margin (mm)
+  idCardPrintWidthMm?: number; // badge width (mm)
+  idCardPrintHeightMm?: number; // badge height (mm)
+  idCardBorderMm?: number; // badge border thickness (mm)
+  idCardLogoPx?: number; // logo size (px)
+  idCardQrPx?: number; // QR size (px)
+  idCardNameFontPx?: number; // name font size (px)
 }
 
 export interface Guest {

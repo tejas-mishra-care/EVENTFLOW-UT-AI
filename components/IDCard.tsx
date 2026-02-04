@@ -14,6 +14,13 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
   const showEmail = !!event.idCardShowEmail;
   const showEventDate = event.idCardShowEventDate !== false;
 
+  const printW = typeof event.idCardPrintWidthMm === 'number' ? event.idCardPrintWidthMm : null;
+  const printH = typeof event.idCardPrintHeightMm === 'number' ? event.idCardPrintHeightMm : null;
+  const borderMm = typeof event.idCardBorderMm === 'number' ? event.idCardBorderMm : null;
+  const logoPx = typeof event.idCardLogoPx === 'number' ? event.idCardLogoPx : null;
+  const qrPx = typeof event.idCardQrPx === 'number' ? event.idCardQrPx : null;
+  const nameFontPx = typeof event.idCardNameFontPx === 'number' ? event.idCardNameFontPx : null;
+
   // Helper to validate QR code values
   const isValidQRValue = (value: string | undefined): boolean => {
     return typeof value === 'string' && value.trim().length > 0;
@@ -170,12 +177,26 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
   // Standard Layout (Default)
   return (
     <div className="print-only hidden flex items-center justify-center h-screen bg-gray-100">
-      <div className="w-[300px] h-[450px] border-2 border-black bg-white relative flex flex-col items-center text-center p-6 shadow-none">
+      <div
+        className="bg-white relative flex flex-col items-center text-center p-6 shadow-none"
+        style={{
+          width: printW ? `${printW}mm` : '300px',
+          height: printH ? `${printH}mm` : '450px',
+          borderStyle: 'solid',
+          borderColor: '#000',
+          borderWidth: borderMm != null ? `${borderMm}mm` : '2px',
+        }}
+      >
         <HolePunch />
         
         <div className="mt-8 mb-4">
              {event.logoUrl ? (
-                 <img src={event.logoUrl} alt="Logo" className="h-16 object-contain" />
+                 <img
+                   src={event.logoUrl}
+                   alt="Logo"
+                   className="object-contain"
+                   style={{ height: logoPx ? `${logoPx}px` : '4rem' }}
+                 />
              ) : (
                 <div 
                   className="h-16 w-16 rounded-full flex items-center justify-center text-white font-bold text-xl"
@@ -192,7 +213,10 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
         )}
 
         <div className="flex-1 flex flex-col justify-center w-full">
-            <h1 className="text-3xl font-black text-slate-900 mb-2 break-words leading-tight">
+            <h1
+              className="font-black text-slate-900 mb-2 break-words leading-tight"
+              style={{ fontSize: nameFontPx ? `${nameFontPx}px` : undefined }}
+            >
                 {guest.name}
             </h1>
             <span 
@@ -212,7 +236,7 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
         <div className="mt-auto mb-4">
              <div className="p-2 bg-white border border-gray-200 rounded-lg">
                 {isValidQRValue(guest.qrCode) && (
-                  <SafeQRCode value={guest.qrCode} size={80} />
+                  <SafeQRCode value={guest.qrCode} size={qrPx || 80} />
                 )}
              </div>
              <p className="text-[10px] text-gray-400 mt-2 font-mono">{guest.id}</p>
