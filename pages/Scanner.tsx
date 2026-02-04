@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { QRScanner } from '../components/QRScanner';
-import { getEventById, getGuestByQRCode, checkInGuest, getEventStats, getEventGuests, markGuestIdPrinted, updateVolunteerHeartbeat, updateGuest } from '../services/db';
+import { getEventById, getEventByVolunteerPassword, getGuestByQRCode, checkInGuest, getEventStats, getEventGuests, markGuestIdPrinted, updateVolunteerHeartbeat, updateGuest } from '../services/db';
 import { Guest, Event } from '../types';
 import { Check, Printer, X, ChevronLeft, User, BarChart, Scan, Search, UserCheck } from 'lucide-react';
 import { IDCard } from '../components/IDCard';
@@ -30,6 +30,8 @@ export const Scanner: React.FC = () => {
   const [manualGuestsLoaded, setManualGuestsLoaded] = useState(false);
   
   const volunteerName = sessionStorage.getItem('volunteer_name') || 'Unknown Volunteer';
+  const volunteerSession = sessionStorage.getItem('volunteer_session') || '';
+  const volunteerAccessCode = sessionStorage.getItem('volunteer_access_code') || '';
 
   useEffect(() => {
     const a = typeof scannedGuest?.extraAdults === 'number' ? scannedGuest!.extraAdults! : 0;
@@ -42,6 +44,30 @@ export const Scanner: React.FC = () => {
     if (eventId) {
         const init = async () => {
             const e = await getEventById(eventId);
+            if (!e) {
+              setEvent(undefined);
+              return;
+            }
+
+            // Re-check access code so changing the code immediately invalidates old sessions
+            const code = String(volunteerAccessCode || '').trim().toUpperCase();
+            if (!code) {
+              sessionStorage.removeItem('volunteer_name');
+              sessionStorage.removeItem('volunteer_session');
+              sessionStorage.removeItem('volunteer_access_code');
+              navigate('/volunteer-login');
+              return;
+            }
+
+            const evtByCode = await getEventByVolunteerPassword(code);
+            if (!evtByCode || evtByCode.id !== eventId) {
+              sessionStorage.removeItem('volunteer_name');
+              sessionStorage.removeItem('volunteer_session');
+              sessionStorage.removeItem('volunteer_access_code');
+              navigate('/volunteer-login');
+              return;
+            }
+
             setEvent(e);
             await updateStats();
         };
@@ -53,14 +79,14 @@ export const Scanner: React.FC = () => {
   useEffect(() => {
     if (eventId && volunteerName) {
         // Initial heartbeat
-        updateVolunteerHeartbeat(eventId, volunteerName);
+        updateVolunteerHeartbeat(eventId, volunteerName, volunteerSession);
         
         const interval = setInterval(() => {
-            updateVolunteerHeartbeat(eventId, volunteerName);
+            updateVolunteerHeartbeat(eventId, volunteerName, volunteerSession);
         }, 30000); // 30s
         return () => clearInterval(interval);
     }
-  }, [eventId, volunteerName]);
+  }, [eventId, volunteerName, volunteerSession]);
 
   useEffect(() => {
     if (!showManual || !eventId) return;

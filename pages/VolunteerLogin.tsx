@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getEvents } from '../services/db';
+import { getEventByVolunteerPassword } from '../services/db';
 import { Scan, ArrowRight, User, Loader2 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 
@@ -19,14 +19,14 @@ export const VolunteerLogin: React.FC = () => {
     setLoading(true);
     
     try {
-        // Fetch all events and check password. 
-        // Note: Ideally in a real app, you'd have a specific query or cloud function for this to avoid exposing all event data.
-        const events = await getEvents();
-        const event = events.find(ev => ev.volunteerPassword === accessCode);
+        const code = String(accessCode || '').trim().toUpperCase();
+        const event = await getEventByVolunteerPassword(code);
 
         if (event) {
             // Store volunteer info in session storage
-            sessionStorage.setItem('volunteer_name', volunteerName);
+            sessionStorage.setItem('volunteer_name', String(volunteerName || '').trim());
+            sessionStorage.setItem('volunteer_session', `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+            sessionStorage.setItem('volunteer_access_code', code);
             navigate(`/volunteer/${event.id}/scan`);
         } else {
             setError('Invalid access code. Please check with event organizer.');

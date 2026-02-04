@@ -7,6 +7,7 @@ import {
   deleteDoc, 
   doc, 
   getDocs, 
+  getDocsFromServer,
   getDoc, 
   query, 
   where, 
@@ -24,6 +25,8 @@ import { db, auth } from './firebase';
 
 // Helper to generate UUIDs locally if needed (though Firestore handles IDs)
 const generateId = () => Math.random().toString(36).substring(2, 11);
+
+const normalizeVolunteerCode = (raw: string) => String(raw || '').trim().toUpperCase();
 
 // --- User Auth ---
 
@@ -81,6 +84,7 @@ export const createEvent = async (eventData: Omit<Event, 'id' | 'ownerId'>): Pro
 
   const docRef = await addDoc(collection(db, 'events'), {
     ...eventData,
+    volunteerPassword: normalizeVolunteerCode((eventData as any).volunteerPassword || ''),
     ticketPrefix: (eventData as any).ticketPrefix ?? 'G-',
     nextTicketNumber: (eventData as any).nextTicketNumber ?? 151,
     useTicketCodeInQR: (eventData as any).useTicketCodeInQR ?? true,
@@ -97,12 +101,39 @@ export const createEvent = async (eventData: Omit<Event, 'id' | 'ownerId'>): Pro
 
 export const updateEvent = async (eventId: string, updates: Partial<Event>): Promise<Event> => {
   const docRef = doc(db, 'events', eventId);
-  await updateDoc(docRef, updates);
+  const safeUpdates: any = { ...updates };
+  if (typeof safeUpdates.volunteerPassword === 'string') {
+    safeUpdates.volunteerPassword = normalizeVolunteerCode(safeUpdates.volunteerPassword);
+  }
+  await updateDoc(docRef, safeUpdates);
   
   // Return the updated object (fetching it fresh or merging)
   const snap = await getDoc(docRef);
   const data = (snap.data() as any) || {};
   return { id: snap.id, ...(data as object) } as Event;
+};
+
+export const getEventByVolunteerPassword = async (accessCodeRaw: string): Promise<Event | undefined> => {
+  const accessCode = normalizeVolunteerCode(accessCodeRaw);
+  if (!accessCode) return undefined;
+
+  const q = query(collection(db, 'events'), where('volunteerPassword', '==', accessCode));
+  try {
+    const snap = await getDocsFromServer(q);
+    if (!snap.empty) {
+      const d = snap.docs[0];
+      const data = (d.data() as any) || {};
+      return { id: d.id, ...(data as object) } as Event;
+    }
+  } catch (_) {
+    // ignore and fallback
+  }
+
+  const snap = await getDocs(q);
+  if (snap.empty) return undefined;
+  const d = snap.docs[0];
+  const data = (d.data() as any) || {};
+  return { id: d.id, ...(data as object) } as Event;
 };
 
 export const deleteEvent = async (eventId: string): Promise<void> => {
@@ -363,12 +394,15 @@ export const getEventStats = async (eventId: string) => {
 };
 
 // --- Volunteer Activity ---
-export const updateVolunteerHeartbeat = async (eventId: string, volunteerName: string) => {
+export const updateVolunteerHeartbeat = async (eventId: string, volunteerName: string, sessionId?: string) => {
   // Using a separate collection for sessions
-  const sessionRef = doc(db, `events/${eventId}/sessions/${volunteerName}`);
+  const displayName = String(volunteerName || '').trim() || 'Volunteer';
+  const docId = sessionId ? `${displayName}__${String(sessionId)}` : displayName;
+  const sessionRef = doc(db, `events/${eventId}/sessions/${docId}`);
   await setDoc(sessionRef, {
     lastSeen: serverTimestamp(),
-    name: volunteerName
+    name: docId,
+    displayName
   }, { merge: true });
 };
 
