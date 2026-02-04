@@ -14,6 +14,8 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
   const showEmail = !!event.idCardShowEmail;
   const showEventDate = event.idCardShowEventDate !== false;
 
+  const printedCode = String((guest as any).ticketCode || '').trim() || String(guest.qrCode || '').trim() || String(guest.id || '').trim();
+
   const printW = typeof event.idCardPrintWidthMm === 'number' ? event.idCardPrintWidthMm : null;
   const printH = typeof event.idCardPrintHeightMm === 'number' ? event.idCardPrintHeightMm : null;
   const borderMm = typeof event.idCardBorderMm === 'number' ? event.idCardBorderMm : null;
@@ -52,6 +54,7 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
       .replace(/{{\s*guest\.email\s*}}/g, escapeHtml(guest.email))
       .replace(/{{\s*guest\.phone\s*}}/g, escapeHtml(guest.phone || ''))
       .replace(/{{\s*guest\.id\s*}}/g, escapeHtml(guest.id || ''))
+      .replace(/{{\s*guest\.ticketCode\s*}}/g, escapeHtml((guest as any).ticketCode || ''))
       .replace(/{{\s*event\.name\s*}}/g, escapeHtml(event.name))
       .replace(/{{\s*event\.date\s*}}/g, escapeHtml(event.date))
       .replace(/{{\s*event\.location\s*}}/g, escapeHtml(event.location))
@@ -130,7 +133,7 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
                         {isValidQRValue(guest.qrCode) && (
                           <SafeQRCode value={guest.qrCode} size={90} />
                         )}
-                        <p className="text-[9px] text-gray-400 mt-1 font-mono">{guest.id}</p>
+                        <p className="text-[9px] text-gray-400 mt-1 font-mono">{printedCode}</p>
                     </div>
                 </div>
             </div>
@@ -168,6 +171,7 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
                     {isValidQRValue(guest.qrCode) && (
                       <SafeQRCode value={guest.qrCode} size={100} />
                     )}
+                    <p className="text-[9px] text-gray-400 mt-1 font-mono text-center">{printedCode}</p>
                 </div>
              </div>
         </div>
@@ -239,7 +243,7 @@ export const IDCard: React.FC<IDCardProps> = ({ guest, event }) => {
                   <SafeQRCode value={guest.qrCode} size={qrPx || 80} />
                 )}
              </div>
-             <p className="text-[10px] text-gray-400 mt-2 font-mono">{guest.id}</p>
+             <p className="text-[10px] text-gray-400 mt-2 font-mono">{printedCode}</p>
         </div>
       </div>
     </div>

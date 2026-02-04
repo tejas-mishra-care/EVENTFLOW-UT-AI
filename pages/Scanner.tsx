@@ -225,16 +225,30 @@ export const Scanner: React.FC = () => {
   const handleManualSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const query = e.target.value;
     setSearchQuery(query);
-    if (query.length > 2) {
-      const q = query.toLowerCase();
-      const results = manualGuestsCache.filter(g =>
-        g.name.toLowerCase().includes(q) ||
-        g.email.toLowerCase().includes(q)
-      );
-      setSearchResults(results);
-    } else {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) {
       setSearchResults([]);
+      return;
     }
+
+    const results = manualGuestsCache
+      .filter(g => {
+        const hay = [
+          g.name,
+          g.email,
+          (g as any).phone || '',
+          g.id,
+          (g as any).ticketCode || '',
+          (g as any).qrCode || '',
+          ...Object.keys((g as any).customData || {}),
+          ...Object.values((g as any).customData || {}),
+        ]
+          .map(v => String(v || '').toLowerCase())
+          .join(' ');
+        return hay.includes(q);
+      })
+      .slice(0, 50);
+    setSearchResults(results);
   };
 
   const handlePrint = async (g?: Guest | null) => {
@@ -269,7 +283,8 @@ export const Scanner: React.FC = () => {
         extraChildren: children,
         totalAttendees,
       });
-      setScannedGuest(prev => prev ? ({ ...prev, extraAdults: adults, extraChildren: children, totalAttendees }) : prev);
+      await updateStats();
+      resetScan();
     } finally {
       setSavingAttendance(false);
     }
@@ -323,7 +338,7 @@ export const Scanner: React.FC = () => {
                      <input 
                         autoFocus
                         type="text" 
-                        placeholder="Search name or email..." 
+                        placeholder="Search name, phone, email, ticket, guest id..." 
                         className="w-full pl-12 pr-4 py-4 bg-slate-800 rounded-xl border border-slate-700 text-lg text-white outline-none focus:border-indigo-500 placeholder:text-slate-500 caret-white"
                         style={{ color: 'white' }}
                         value={searchQuery}

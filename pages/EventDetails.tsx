@@ -949,8 +949,23 @@ export const EventDetails: React.FC = () => {
   };
 
   const filteredGuests = guests.filter(g => {
-    const matchesSearch = g.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          g.email.toLowerCase().includes(searchTerm.toLowerCase());
+    const q = String(searchTerm || '').trim().toLowerCase();
+    const matchesSearch = (() => {
+      if (!q) return true;
+      const hay = [
+        g.name,
+        g.email,
+        (g as any).phone || '',
+        g.id,
+        (g as any).ticketCode || '',
+        (g as any).qrCode || '',
+        ...Object.keys((g as any).customData || {}),
+        ...Object.values((g as any).customData || {}),
+      ]
+        .map(v => String(v || '').toLowerCase())
+        .join(' ');
+      return hay.includes(q);
+    })();
     
     if (statusFilter === 'all') return matchesSearch;
     if (statusFilter === 'checked-in') return matchesSearch && g.checkedIn;
