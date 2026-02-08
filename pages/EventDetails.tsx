@@ -9,6 +9,7 @@ import { Event, Guest, FormField } from '../types';
 import { IDCard } from '../components/IDCard';
 import { EmailSettings } from '../components/EmailSettings';
 import { WhatsAppSettings } from '../components/WhatsAppSettings';
+import { SmsSettings } from '../components/SmsSettings';
 import Papa from 'papaparse';
 import SafeQRCode from '../components/SafeQRCode';
 import { Upload, Download, Mail, Search, CheckCircle, Copy, ExternalLink, Send, Settings, Save, Trash2, Image as ImageIcon, Plus, X, Activity, ArrowRight, Eye, LayoutTemplate, Printer, Edit2, RotateCcw, Filter, UserCheck, CircleDashed, CheckSquare, Square, QrCode, MessageCircle } from 'lucide-react';
@@ -92,6 +93,15 @@ export const EventDetails: React.FC = () => {
   // Email Settings Modal
   const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
+  const [showSmsSettings, setShowSmsSettings] = useState(false);
+  const [contactColumnMode, setContactColumnMode] = useState<'email' | 'phone' | 'both'>(() => {
+    try {
+      const saved = localStorage.getItem('eventflow_contactColumnMode');
+      if (saved === 'email' || saved === 'phone' || saved === 'both') return saved;
+    } catch (e) {
+    }
+    return 'both';
+  });
   const user = getCurrentUser();
 
   useEffect(() => {
@@ -1709,6 +1719,22 @@ export const EventDetails: React.FC = () => {
                                     <option value="pending">Pending</option>
                                 </select>
                             </div>
+
+                            <div className="relative w-44">
+                                <select
+                                    value={contactColumnMode}
+                                    onChange={(e) => {
+                                      const v = e.target.value as any;
+                                      setContactColumnMode(v);
+                                      try { localStorage.setItem('eventflow_contactColumnMode', String(v)); } catch (err) {}
+                                    }}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 appearance-none bg-white text-sm"
+                                >
+                                    <option value="both">Email + Phone</option>
+                                    <option value="phone">Phone Only</option>
+                                    <option value="email">Email Only</option>
+                                </select>
+                            </div>
                         </div>
                         <div className="flex gap-2">
                              <button 
@@ -1751,7 +1777,13 @@ export const EventDetails: React.FC = () => {
                                         </button>
                                     </th>
                                     <th className="px-4 py-3 font-semibold">Name</th>
-                                    <th className="px-4 py-3 font-semibold">Email</th>
+                                    {contactColumnMode === 'both' ? (
+                                      <th className="px-4 py-3 font-semibold">Contact</th>
+                                    ) : contactColumnMode === 'phone' ? (
+                                      <th className="px-4 py-3 font-semibold">Phone</th>
+                                    ) : (
+                                      <th className="px-4 py-3 font-semibold">Email</th>
+                                    )}
                                     <th className="px-4 py-3 font-semibold">Status</th>
                                     <th className="px-4 py-3 font-semibold">Attendees</th>
                                     <th className="px-4 py-3 font-semibold">Volunteer</th>
@@ -1773,7 +1805,18 @@ export const EventDetails: React.FC = () => {
                                             </button>
                                         </td>
                                         <td className="px-4 py-3 font-medium text-slate-900">{guest.name}</td>
-                                        <td className="px-4 py-3 text-slate-600">{guest.email}</td>
+                                        <td className="px-4 py-3 text-slate-600">
+                                          {contactColumnMode === 'both' ? (
+                                            <div className="space-y-0.5">
+                                              <div className="font-medium text-slate-900">{guest.phone || '-'}</div>
+                                              <div className="text-xs text-slate-500 truncate max-w-[260px]">{guest.email || '-'}</div>
+                                            </div>
+                                          ) : contactColumnMode === 'phone' ? (
+                                            <span className="font-medium text-slate-900">{guest.phone || '-'}</span>
+                                          ) : (
+                                            <span className="truncate inline-block max-w-[260px]">{guest.email || '-'}</span>
+                                          )}
+                                        </td>
                                         <td className="px-4 py-3">
                                             {guest.checkedIn ? (
                                                 <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium">
@@ -1875,7 +1918,7 @@ export const EventDetails: React.FC = () => {
                                     </tr>
                                 )) : (
                                     <tr>
-                                        <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                                        <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
                                             No guests found matching filters.
                                         </td>
                                     </tr>
@@ -2914,6 +2957,23 @@ export const EventDetails: React.FC = () => {
                           </div>
                         </div>
 
+                        <div className="bg-slate-50 p-6 rounded-lg border border-slate-200 mt-6">
+                          <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold text-slate-900">SMS Invitation</h3>
+                            <button
+                              type="button"
+                              onClick={() => setShowSmsSettings(true)}
+                              className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white rounded-lg font-medium transition-colors"
+                            >
+                              <MessageSquare size={16} />
+                              Configure SMS
+                            </button>
+                          </div>
+                          <p className="text-sm text-slate-600">
+                            Configure Twilio or AWS SNS to send SMS to guests. (Sending flow will be added next.)
+                          </p>
+                        </div>
+
                         {/* ID Card Template Section */}
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                           <h3 className="text-lg font-bold text-slate-900 mb-4">ID Card Template</h3>
@@ -3029,6 +3089,11 @@ export const EventDetails: React.FC = () => {
       <WhatsAppSettings
         isOpen={showWhatsAppSettings}
         onClose={() => setShowWhatsAppSettings(false)}
+      />
+
+      <SmsSettings
+        isOpen={showSmsSettings}
+        onClose={() => setShowSmsSettings(false)}
       />
     </Layout>
   );
