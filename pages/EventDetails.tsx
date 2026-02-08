@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Layout } from '../components/Layout';
 import { useParams, useNavigate } from 'react-router-dom';
 import { addGuestsBulk, enqueuePrintJob, getEventStats, updateGuest, updateEvent, deleteEvent, deleteGuest, clearEventGuests, markGuestIdPrinted } from '../services/db';
@@ -61,6 +61,11 @@ export const EventDetails: React.FC = () => {
   // Settings Form State
   const [editForm, setEditForm] = useState<Partial<Event>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<'registration' | 'print' | 'guide' | 'event' | 'branding' | 'form' | 'email' | 'volunteers' | 'danger'>('registration');
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const autoSaveSkipNextRef = useRef(true);
+  const autoSaveLastJsonRef = useRef<string>('');
+  const autoSaveInFlightRef = useRef(false);
 
   // New Field State
   const [newFieldLabel, setNewFieldLabel] = useState('');
@@ -97,9 +102,153 @@ export const EventDetails: React.FC = () => {
       const evt = { id: snap.id, ...(snap.data() as object) } as Event;
       setEvent(evt);
       setEditForm(evt);
+      try {
+        autoSaveLastJsonRef.current = JSON.stringify(evt || {});
+      } catch (_) {
+        autoSaveLastJsonRef.current = '';
+      }
+      autoSaveSkipNextRef.current = true;
     });
     return () => unsub();
   }, [id]);
+
+  useEffect(() => {
+    if (!event) return;
+    if (autoSaveSkipNextRef.current) {
+      autoSaveSkipNextRef.current = false;
+      return;
+    }
+
+    let json = '';
+    try {
+      json = JSON.stringify(editForm || {});
+    } catch (_) {
+      return;
+    }
+
+    if (json === autoSaveLastJsonRef.current) return;
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      if (!event) return;
+      if (autoSaveInFlightRef.current) return;
+      autoSaveInFlightRef.current = true;
+      setIsSaving(true);
+      try {
+        const updated = await updateEvent(event.id, editForm);
+        setEvent(updated);
+        autoSaveLastJsonRef.current = json;
+      } catch (e) {
+        addToast('Auto-save failed. Please try again.', 'error');
+      } finally {
+        setIsSaving(false);
+        autoSaveInFlightRef.current = false;
+      }
+    }, 900);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [editForm, event]);
+
+  const settingsHelp = useMemo(() => {
+    if (settingsSection === 'registration') {
+      return {
+        title: 'Registration & Entry Links',
+        steps: [
+          'Use “Show QR” to display a QR for guests at the venue or on social media.',
+          'Use “Copy Link” to share the registration / spot-entry / self-check-in link on WhatsApp or SMS.',
+          'Self Check-in is recommended at the gate: guest enters phone, confirms entry, and badge print job is queued automatically.',
+          'Spot Entry is for rush mode when a volunteer enters guest details quickly (instant check-in).',
+        ],
+      };
+    }
+    if (settingsSection === 'print') {
+      return {
+        title: 'Print Stations (Multi-Printer)',
+        steps: [
+          'Open the Print Station link on each printer device (PC/Tablet).',
+          'Keep Auto Print ON on each station. Stations auto-claim jobs to prevent double prints.',
+          'Use “Print Queue Monitor” to see queued/claimed/printed/failed jobs in real time.',
+          'If a job failed (printer offline / dialog closed), click “Requeue”.',
+        ],
+      };
+    }
+    if (settingsSection === 'guide') {
+      return {
+        title: 'Full Setup Guide',
+        steps: [
+          'Recommended setup order: Registration -> Volunteer Scanner -> Print Stations -> Email/WhatsApp -> Final test run.',
+          'Make sure phone numbers are unique per event (already enforced) so self check-in works reliably.',
+          'Do one full end-to-end test: register -> self check-in -> print station prints.',
+        ],
+      };
+    }
+    if (settingsSection === 'event') {
+      return {
+        title: 'Event Details',
+        steps: [
+          'Edit name/date/location and event status here.',
+          'Active = event is ongoing. Completed = archived but still visible in history.',
+        ],
+      };
+    }
+    if (settingsSection === 'branding') {
+      return {
+        title: 'Branding & Badge Printing',
+        steps: [
+          'Upload Logo/Flyer and select badge layout/color.',
+          'Set print page sizes (mm) to match your printer paper settings (e.g. 58mm roll).',
+          'Use Print Test Mode (PDF) to verify layout without using a physical printer.',
+        ],
+      };
+    }
+    if (settingsSection === 'form') {
+      return {
+        title: 'Registration Form Builder',
+        steps: [
+          'Add custom fields like Company/City/Category for your event.',
+          'These fields will appear in both Public Registration and Spot Entry.',
+          'Guests can also be searched by these custom fields in Scanner and Dashboard.',
+        ],
+      };
+    }
+    if (settingsSection === 'email') {
+      return {
+        title: 'Email & WhatsApp',
+        steps: [
+          'Configure email provider to send invitations by email.',
+          'Configure WhatsApp (Meta Cloud API) for WhatsApp invitations and updates.',
+          'Use Logs tab to see queued/sent/failed messages for troubleshooting.',
+        ],
+      };
+    }
+    if (settingsSection === 'volunteers') {
+      return {
+        title: 'Volunteer Access',
+        steps: [
+          'Set an access code for volunteers. Share this with scanner team only.',
+          'Volunteers login from Volunteer Login page and scan/check-in guests.',
+          'Changing the code invalidates old sessions (scanner re-validates on load).',
+        ],
+      };
+    }
+    return {
+      title: 'Danger Zone',
+      steps: [
+        'Delete Event: removes event permanently.',
+        'Clear Guests: deletes all guests for this event (cannot be undone).',
+        'Use these options only if you are 100% sure.',
+      ],
+    };
+  }, [settingsSection]);
 
   useEffect(() => {
     if (!id) return;
@@ -1458,35 +1607,37 @@ export const EventDetails: React.FC = () => {
                                 </div>
                             </div>
                         </div>
-                    )}
+                        )}
                 </div>
 
                 {!isEditingGuest && (
                     <div className="p-6 bg-slate-50 border-t border-slate-200 grid grid-cols-2 gap-3">
-                         <div className="flex items-center gap-4">
-                             <button 
-                                 type="button"
-                                 onClick={() => handleResendSingleInvite(selectedGuest)}
-                                 className="py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300 transition-colors flex items-center justify-center gap-2"
-                             >
-                                  <RotateCcw size={16} /> Resend Email
-                             </button>
-                             <button 
-                                 onClick={() => handlePrintBadge(selectedGuest)}
-                                 className={`py-2 text-white ${selectedGuest.idCardPrinted ? 'bg-indigo-800' : 'bg-indigo-600 hover:bg-indigo-700'} rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2`}
-                             >
-                                  <Printer size={16} /> {(event as any)?.idCardPrintTestMode ? (selectedGuest.idCardPrinted ? 'Reprint (PDF)' : 'Print (PDF)') : (selectedGuest.idCardPrinted ? 'Reprint Badge' : 'Print Badge')}
-                             </button>
-                             <button 
-                                 onClick={() => {
-                                     setSelectedGuest(null);
-                                     setIsEditingGuest(false);
-                                 }}
+                         <button 
+                             type="button"
+                             onClick={() => handleResendSingleInvite(selectedGuest)}
+                             className="py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300 transition-colors flex items-center justify-center gap-2"
+                         >
+                              <RotateCcw size={16} /> Resend Email
+                         </button>
+                         <button 
+                             type="button"
+                             onClick={() => handlePrintBadge(selectedGuest)}
+                             className={`py-2 text-white ${selectedGuest.idCardPrinted ? 'bg-indigo-800' : 'bg-indigo-600 hover:bg-indigo-700'} rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2`}
+                         >
+                              <Printer size={16} /> {(event as any)?.idCardPrintTestMode ? (selectedGuest.idCardPrinted ? 'Reprint (PDF)' : 'Print (PDF)') : (selectedGuest.idCardPrinted ? 'Reprint Badge' : 'Print Badge')}
+                         </button>
+                         <button 
+                             type="button"
+                             onClick={() => {
+                                 setSelectedGuest(null);
+                                 setIsEditingGuest(false);
+                             }}
                              className="py-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
                          >
                              <Download size={16} /> Save QR
                          </button>
                          <button 
+                             type="button"
                              onClick={() => {
                                  const guest = selectedGuest;
                                  setSelectedGuest(null);
@@ -1496,7 +1647,6 @@ export const EventDetails: React.FC = () => {
                          >
                              <Trash2 size={16} /> Delete
                          </button>
-                    </div>
                     </div>
                 )}
             </div>
@@ -2129,9 +2279,32 @@ export const EventDetails: React.FC = () => {
             )}
 
             {activeTab === 'settings' && (
-                <div className="max-w-3xl mx-auto">
-                     {/* Settings form JSX remains mostly unchanged, relies on async handleUpdateEvent */}
-                     <form onSubmit={handleUpdateEvent} className="space-y-6">
+                <div className="max-w-6xl mx-auto">
+                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <div className="lg:col-span-3">
+                          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                            <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Settings</div>
+                            <div className="p-2">
+                              <button type="button" onClick={() => setSettingsSection('registration')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'registration' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Registration & Entry</button>
+                              <button type="button" onClick={() => setSettingsSection('print')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'print' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Print Stations</button>
+                              <button type="button" onClick={() => setSettingsSection('guide')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'guide' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Setup Guide</button>
+                              <button type="button" onClick={() => setSettingsSection('event')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'event' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Event Details</button>
+                              <button type="button" onClick={() => setSettingsSection('branding')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'branding' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Branding & Badge</button>
+                              <button type="button" onClick={() => setSettingsSection('form')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'form' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Form Builder</button>
+                              <button type="button" onClick={() => setSettingsSection('email')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'email' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Email & WhatsApp</button>
+                              <button type="button" onClick={() => setSettingsSection('volunteers')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'volunteers' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}>Volunteers</button>
+                              <button type="button" onClick={() => setSettingsSection('danger')} className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium ${settingsSection === 'danger' ? 'bg-red-50 text-red-700' : 'text-slate-700 hover:bg-slate-50'}`}>Danger Zone</button>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 text-xs text-slate-500">
+                            {isSaving ? 'Saving…' : 'Auto-saved'}
+                          </div>
+                        </div>
+
+                        <div className="lg:col-span-6 space-y-6">
+                          <form onSubmit={handleUpdateEvent} className="space-y-6">
+                        {settingsSection === 'registration' && (
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                             <QrCode size={20} /> Registration & Spot Entry
@@ -2221,7 +2394,9 @@ export const EventDetails: React.FC = () => {
                             </div>
                           </div>
                         </div>
+                        )}
 
+                        {settingsSection === 'print' && (
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                             <Printer size={20} /> Print Stations (Multi-Printers)
@@ -2332,7 +2507,9 @@ export const EventDetails: React.FC = () => {
                             </div>
                           </div>
                         </div>
+                        )}
 
+                        {settingsSection === 'guide' && (
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                           <h3 className="text-lg font-bold text-slate-900 mb-4">Setup Guide (How to use EventFlow)</h3>
                           <div className="space-y-4 text-sm text-slate-700">
@@ -2361,7 +2538,9 @@ export const EventDetails: React.FC = () => {
                             </div>
                           </div>
                         </div>
+                        )}
 
+                        {settingsSection === 'event' && (
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                                 <Settings size={20} /> Event Details
@@ -2408,9 +2587,11 @@ export const EventDetails: React.FC = () => {
                                 </select>
                             </div>
                         </div>
+                        )}
 
                         {/* ... (Other settings sections: Branding, Form Builder, Email, Volunteer Access, Danger Zone) ... */}
                         {/* They bind to `editForm` state which is populated async, so no major JSX change needed except ensuring logic handles it */}
+                        {settingsSection === 'branding' && (
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                                 <ImageIcon size={20} /> Branding & Design
@@ -2586,7 +2767,9 @@ export const EventDetails: React.FC = () => {
                               </div>
                             </div>
                         </div>
+                        )}
                         
+                        {settingsSection === 'form' && (
                          <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <h3 className="text-lg font-bold text-slate-900 mb-4">Registration Form Builder</h3>
                              <div className="space-y-3 mb-4">
@@ -2625,7 +2808,10 @@ export const EventDetails: React.FC = () => {
                                 </button>
                             </div>
                         </div>
+                        )}
 
+                        {settingsSection === 'email' && (
+                        <>
                         {/* Email Invite Section */}
                          <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <div className="flex items-center justify-between mb-4">
@@ -2740,7 +2926,10 @@ export const EventDetails: React.FC = () => {
                           />
                           <p className="text-xs text-slate-500 mt-1">Leave blank to use the selected built‑in layout (Standard/Modern/Minimal).</p>
                         </div>
+                        </>
+                        )}
 
+                        {settingsSection === 'volunteers' && (
                          <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <h3 className="text-lg font-bold text-slate-900 mb-4">Volunteer Access</h3>
                             <div className="flex items-center gap-4">
@@ -2758,7 +2947,10 @@ export const EventDetails: React.FC = () => {
                                 </div>
                             </div>
                         </div>
+                        )}
 
+                        {settingsSection === 'danger' && (
+                        <>
                         {/* Danger Zone */}
                         <div className="bg-red-50 p-6 rounded-lg border border-red-200 mt-8">
                              <h3 className="text-lg font-bold text-red-900 mb-4 flex items-center gap-2">
@@ -2794,25 +2986,44 @@ export const EventDetails: React.FC = () => {
                                 </div>
                              </div>
                         </div>
+                        </>
+                        )}
 
-                        <div className="flex justify-end pt-4">
-                             <button 
-                                type="submit" 
-                                disabled={isSaving}
-                                className="px-8 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium flex items-center gap-2"
-                             >
-                                {isSaving ? 'Saving...' : <><Save size={18} /> Save Changes</>}
-                             </button>
+                        <div className="pt-2 flex items-center justify-end">
+                          <button
+                            type="submit"
+                            disabled={isSaving}
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-70"
+                          >
+                            <Save size={16} /> Save Now
+                          </button>
                         </div>
-                     </form>
+                          </form>
+                        </div>
+
+                        <div className="lg:col-span-3">
+                          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                            <div className="p-4 border-b border-slate-100 font-bold text-slate-900">How to use</div>
+                            <div className="p-4 max-h-[70vh] overflow-auto">
+                              <div className="text-sm font-semibold text-slate-900 mb-2">{settingsHelp.title}</div>
+                              <ol className="list-decimal ml-5 space-y-2 text-sm text-slate-700">
+                                {settingsHelp.steps.map((s, idx) => (
+                                  <li key={idx}>{s}</li>
+                                ))}
+                              </ol>
+                            </div>
+                          </div>
+                        </div>
+                     </div>
                 </div>
             )}
+
         </div>
       </div>
-      
-      <EmailSettings 
-        isOpen={showEmailSettings} 
-        onClose={() => setShowEmailSettings(false)} 
+
+      <EmailSettings
+        isOpen={showEmailSettings}
+        onClose={() => setShowEmailSettings(false)}
       />
 
       <WhatsAppSettings

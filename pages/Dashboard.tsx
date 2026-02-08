@@ -2,9 +2,9 @@
 import React, { useEffect, useState } from 'react';
 import { Layout } from '../components/Layout';
 import { Link } from 'react-router-dom';
-import { getEvents, getCurrentUser, getEventStats, loadDemoData } from '../services/db';
+import { getEvents, getCurrentUser, getEventStats } from '../services/db';
 import { Event } from '../types';
-import { Calendar, Users, ArrowRight, Plus, Scan, Database, AlertCircle, Loader2 } from 'lucide-react';
+import { Calendar, Users, ArrowRight, Plus, Scan, Loader2 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 
 export const Dashboard: React.FC = () => {
@@ -44,13 +44,6 @@ export const Dashboard: React.FC = () => {
       return Math.round((checkedIn / total) * 100);
   };
 
-  const handleLoadDemo = async () => {
-    if (window.confirm("This will create a new Demo Event in your database. Continue?")) {
-        setLoading(true);
-        await loadDemoData();
-    }
-  };
-
   return (
     <Layout>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -59,13 +52,6 @@ export const Dashboard: React.FC = () => {
             <p className="text-slate-500">Welcome back, {user?.name}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-            <div className="hidden md:flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 rounded-lg text-xs font-medium border border-green-200">
-                <Database size={14} /> <span>Connected to Firebase</span>
-            </div>
-            
-            <button onClick={handleLoadDemo} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm">
-                <Database size={16} /> Create Demo Event
-            </button>
             <Link to="/volunteer-login" className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium">
                 <Scan size={18} /> Join as Volunteer
             </Link>
@@ -73,12 +59,6 @@ export const Dashboard: React.FC = () => {
                 <Plus size={18} /> New Event
             </Link>
         </div>
-      </div>
-
-      {/* Mobile DB Status */}
-      <div className="md:hidden mb-6 flex items-center gap-2 px-4 py-3 bg-green-50 text-green-800 rounded-lg text-sm border border-green-200">
-           <Database size={16} />
-           <span>Firebase Online</span>
       </div>
 
       {loading ? (
