@@ -81,7 +81,11 @@ export const PublicRegistration: React.FC = () => {
         addToast("Registration successful!", "success");
     } catch (e) {
         console.error(e);
-        addToast("Registration failed. Please try again.", "error");
+        if (String((e as any)?.message || '') === 'PHONE_EXISTS') {
+          addToast('This phone number is already registered for this event. Please use another phone number.', 'warning');
+        } else {
+          addToast("Registration failed. Please try again.", "error");
+        }
     } finally {
         setSubmitting(false);
     }

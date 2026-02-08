@@ -9,6 +9,8 @@ import { VolunteerLogin } from './pages/VolunteerLogin';
 import { Scanner } from './pages/Scanner';
 import { PublicRegistration } from './pages/PublicRegistration';
 import { SpotEntry } from './pages/SpotEntry';
+import { PrintStation } from './pages/PrintStation';
+import { GuestEntry } from './pages/GuestEntry';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ToastProvider } from './components/Toast';
 
@@ -92,6 +94,8 @@ const App: React.FC = () => {
             <Route path="/volunteer/:eventId/scan" element={<Scanner />} />
             <Route path="/register/:eventId" element={<PublicRegistration />} />
             <Route path="/spot-entry/:eventId" element={<SpotEntry />} />
+            <Route path="/print-station/:eventId" element={<PrintStation />} />
+            <Route path="/guest-entry/:eventId" element={<GuestEntry />} />
             
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

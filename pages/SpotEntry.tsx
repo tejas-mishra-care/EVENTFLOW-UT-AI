@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Calendar, Check, Loader2, MapPin } from 'lucide-react';
 import { useToast } from '../components/Toast';
-import { getEventById, addGuest, updateGuest } from '../services/db';
+import { getEventById, addGuest, enqueuePrintJob, updateGuest } from '../services/db';
 import { Event, Guest } from '../types';
 
 export const SpotEntry: React.FC = () => {
@@ -21,6 +21,8 @@ export const SpotEntry: React.FC = () => {
     extraAdults: 0,
     extraChildren: 0,
   });
+
+  const [customData, setCustomData] = useState<Record<string, string>>({});
 
   const totalAttendees = useMemo(() => {
     const a = Number.isFinite(Number(formData.extraAdults)) ? Number(formData.extraAdults) : 0;
@@ -56,7 +58,7 @@ export const SpotEntry: React.FC = () => {
         name: formData.name,
         email: '',
         phone: formData.phone,
-        customData: {},
+        customData,
       });
 
       const checked = await updateGuest(newGuest.id, {
@@ -68,11 +70,21 @@ export const SpotEntry: React.FC = () => {
         totalAttendees,
       } as any);
 
+      try {
+        await enqueuePrintJob(eventId, checked.id, 'spot-entry', 'Spot Entry');
+      } catch (_) {
+        // best-effort
+      }
+
       setCheckedInGuest(checked);
       addToast('Entry successful!', 'success');
     } catch (e) {
       console.error(e);
-      addToast('Spot entry failed. Please try again.', 'error');
+      if (String((e as any)?.message || '') === 'PHONE_EXISTS') {
+        addToast('This phone number is already registered for this event. Please use another phone number.', 'warning');
+      } else {
+        addToast('Spot entry failed. Please try again.', 'error');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -120,6 +132,7 @@ export const SpotEntry: React.FC = () => {
             onClick={() => {
               setCheckedInGuest(null);
               setFormData({ name: '', phone: '', extraAdults: 0, extraChildren: 0 });
+              setCustomData({});
             }}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition-colors"
           >
@@ -173,6 +186,29 @@ export const SpotEntry: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
               />
             </div>
+
+            {event.formFields?.length ? (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <div className="text-sm font-semibold text-slate-900 mb-3">Additional Details</div>
+                <div className="space-y-3">
+                  {event.formFields.map(field => (
+                    <div key={field.id}>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        {field.label} {field.required && <span className="text-red-500">*</span>}
+                      </label>
+                      <input
+                        required={field.required}
+                        type={field.type === 'number' ? 'number' : 'text'}
+                        className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder={`Enter ${field.label}`}
+                        value={customData[field.label] || ''}
+                        onChange={(e) => setCustomData({ ...customData, [field.label]: e.target.value })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-2 gap-3">
               <div>

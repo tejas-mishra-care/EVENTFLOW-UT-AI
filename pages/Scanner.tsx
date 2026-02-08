@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { QRScanner } from '../components/QRScanner';
-import { getEventById, getEventByVolunteerPassword, getGuestByQRCode, checkInGuest, getEventStats, getEventGuests, markGuestIdPrinted, updateVolunteerHeartbeat, updateGuest } from '../services/db';
+import { getEventById, getEventByVolunteerPassword, getGuestByQRCode, checkInGuest, enqueuePrintJob, getEventStats, getEventGuests, markGuestIdPrinted, updateVolunteerHeartbeat, updateGuest } from '../services/db';
 import { Guest, Event } from '../types';
 import { Check, Printer, X, ChevronLeft, User, BarChart, Scan, Search, UserCheck } from 'lucide-react';
 import { IDCard } from '../components/IDCard';
@@ -185,6 +185,13 @@ export const Scanner: React.FC = () => {
             setScannedGuest(checked);
             await ensureAttendanceDefaults(checked);
             await updateStats();
+            try {
+              if (eventId) {
+                await enqueuePrintJob(eventId, checked.id, 'scanner', volunteerName);
+              }
+            } catch (_) {
+              // best-effort
+            }
             playSound('success');
         } catch (e) {
             setScanStatus('error');

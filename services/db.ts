@@ -10,7 +10,10 @@ import {
   getDocsFromServer,
   getDoc, 
   query, 
+  orderBy,
+  limit,
   where, 
+  runTransaction,
   writeBatch,
   setDoc,
   serverTimestamp
@@ -27,6 +30,16 @@ import { db, auth } from './firebase';
 const generateId = () => Math.random().toString(36).substring(2, 11);
 
 const normalizeVolunteerCode = (raw: string) => String(raw || '').trim().toUpperCase();
+
+const normalizePhone = (raw: string) => {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  // keep leading + if present, otherwise digits only
+  const hasPlus = s.startsWith('+');
+  const digits = s.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  return (hasPlus ? '+' : '') + digits;
+};
 
 // --- User Auth ---
 
@@ -182,10 +195,48 @@ export const getEventById = async (id: string): Promise<Event | undefined> => {
   return undefined;
 };
 
+export const getGuestByPhoneForEvent = async (eventId: string, phoneRaw: string): Promise<Guest | undefined> => {
+  const phoneNormalized = normalizePhone(phoneRaw || '');
+  const eventPhoneKey = phoneNormalized ? `${eventId}|${phoneNormalized}` : '';
+  if (!eventPhoneKey) return undefined;
+
+  const q = query(collection(db, 'guests'), where('eventPhoneKey', '==', eventPhoneKey), limit(1));
+  try {
+    const snap = await getDocsFromServer(q);
+    if (snap.empty) return undefined;
+    const d = snap.docs[0];
+    const data = (d.data() as any) || {};
+    return { id: d.id, ...(data as object) } as Guest;
+  } catch (_) {
+    const snap = await getDocs(q);
+    if (snap.empty) return undefined;
+    const d = snap.docs[0];
+    const data = (d.data() as any) || {};
+    return { id: d.id, ...(data as object) } as Guest;
+  }
+};
+
 // --- Guests ---
 
 export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checkedIn'>): Promise<Guest> => {
   const docRef = doc(collection(db, 'guests'));
+
+  const phoneNormalized = normalizePhone((guestData as any).phone || '');
+  const eventPhoneKey = phoneNormalized ? `${guestData.eventId}|${phoneNormalized}` : '';
+
+  if (eventPhoneKey) {
+    const q = query(collection(db, 'guests'), where('eventPhoneKey', '==', eventPhoneKey));
+    try {
+      const snap = await getDocsFromServer(q);
+      if (!snap.empty) throw new Error('PHONE_EXISTS');
+    } catch (e: any) {
+      if (String(e?.message || '') === 'PHONE_EXISTS') throw e;
+      // fallback to cache if server fetch fails
+      const snap2 = await getDocs(q);
+      if (!snap2.empty) throw new Error('PHONE_EXISTS');
+    }
+  }
+
   // fetch event config to compute ticket code
   let prefix = 'G-';
   let nextNum = 151;
@@ -203,6 +254,9 @@ export const addGuest = async (guestData: Omit<Guest, 'id' | 'qrCode' | 'checked
   const qrValue = useTicket ? ticketCode : docRef.id;
   const newGuestData = {
     ...guestData,
+    phone: phoneNormalized || ((guestData as any).phone || ''),
+    phoneNormalized: phoneNormalized || '',
+    eventPhoneKey: eventPhoneKey || '',
     qrCode: qrValue,
     ticketCode,
     checkedIn: false,
@@ -266,15 +320,26 @@ export const addGuestsBulk = async (eventId: string, guestsData: any[]): Promise
   } catch {}
   let assigned = 0;
   
+  const seenKeys = new Set<string>();
   guestsData.forEach(g => {
     const docRef = doc(collection(db, 'guests')); // Auto-ID
     const ticketCode = `${prefix}${nextNum + assigned}`;
     const qrValue = useTicket ? ticketCode : docRef.id;
+    const phoneNormalized = normalizePhone(g.phone || '');
+    const eventPhoneKey = phoneNormalized ? `${eventId}|${phoneNormalized}` : '';
+    if (eventPhoneKey) {
+      if (seenKeys.has(eventPhoneKey)) {
+        throw new Error('DUPLICATE_PHONE_IN_IMPORT');
+      }
+      seenKeys.add(eventPhoneKey);
+    }
     batch.set(docRef, {
       eventId,
       name: g.name,
       email: g.email,
-      phone: g.phone || '',
+      phone: phoneNormalized || (g.phone || ''),
+      phoneNormalized: phoneNormalized || '',
+      eventPhoneKey: eventPhoneKey || '',
       customData: g.customData || {},
       qrCode: qrValue,
       ticketCode,
@@ -304,6 +369,12 @@ export const getEventGuests = async (eventId: string): Promise<Guest[]> => {
     const data = (docSnap.data() as any) || {};
     return { id: docSnap.id, ...(data as object) } as Guest;
   });
+};
+
+export const getGuestById = async (guestId: string): Promise<Guest | undefined> => {
+  const snap = await getDoc(doc(db, 'guests', guestId));
+  if (!snap.exists()) return undefined;
+  return { id: snap.id, ...(snap.data() as object) } as Guest;
 };
 
 export const getGuestByQRCode = async (qrCode: string, eventId?: string): Promise<Guest | undefined> => {
@@ -351,6 +422,101 @@ export const markGuestIdPrinted = async (guestId: string): Promise<Guest> => {
   await updateDoc(docRef, { idCardPrinted: true });
   const snap = await getDoc(docRef);
   return { id: snap.id, ...snap.data() } as Guest;
+};
+
+// --- Print Jobs (Multi-Printer Stations) ---
+export type PrintJobStatus = 'queued' | 'claimed' | 'printed' | 'failed';
+
+export interface PrintJob {
+  id: string;
+  eventId: string;
+  guestId: string;
+  status: PrintJobStatus;
+  stationId?: string;
+  requestedBy?: string;
+  source?: string;
+  createdAt?: any;
+  claimedAt?: any;
+  printedAt?: any;
+  error?: string | null;
+}
+
+export const enqueuePrintJob = async (eventId: string, guestId: string, source?: string, requestedBy?: string) => {
+  const ref = collection(db, `events/${eventId}/printJobs`);
+  const job = {
+    eventId,
+    guestId,
+    status: 'queued' as const,
+    source: source || null,
+    requestedBy: requestedBy || null,
+    error: null,
+    createdAt: serverTimestamp(),
+  };
+  const docRef = await addDoc(ref, job as any);
+  return { id: docRef.id, ...(job as any) } as PrintJob;
+};
+
+export const claimNextPrintJob = async (eventId: string, stationId: string): Promise<PrintJob | null> => {
+  const qJobs = query(
+    collection(db, `events/${eventId}/printJobs`),
+    where('status', '==', 'queued'),
+    orderBy('createdAt', 'asc'),
+    limit(1)
+  );
+
+  let first: any = null;
+  try {
+    const snap = await getDocsFromServer(qJobs);
+    if (snap.empty) return null;
+    first = snap.docs[0];
+  } catch (_) {
+    try {
+      const snap = await getDocs(qJobs);
+      if (snap.empty) return null;
+      first = snap.docs[0];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  if (!first) return null;
+
+  try {
+    const claimed = await runTransaction(db as any, async (tx: any) => {
+      const fresh = await tx.get(first.ref);
+      if (!fresh.exists()) return null;
+      const data = (fresh.data() as any) || {};
+      if (String(data.status || '') !== 'queued') return null;
+      tx.update(first.ref, {
+        status: 'claimed',
+        stationId: String(stationId || ''),
+        claimedAt: serverTimestamp(),
+      });
+      return { id: first.id, ...(data as object), status: 'claimed', stationId } as PrintJob;
+    });
+    return claimed;
+  } catch (_) {
+    return null;
+  }
+};
+
+export const completePrintJob = async (eventId: string, jobId: string, stationId: string) => {
+  const ref = doc(db, `events/${eventId}/printJobs/${jobId}`);
+  await updateDoc(ref, {
+    status: 'printed',
+    printedAt: serverTimestamp(),
+    stationId: String(stationId || ''),
+    error: null,
+  } as any);
+};
+
+export const failPrintJob = async (eventId: string, jobId: string, stationId: string, error: string) => {
+  const ref = doc(db, `events/${eventId}/printJobs/${jobId}`);
+  await updateDoc(ref, {
+    status: 'failed',
+    stationId: String(stationId || ''),
+    error: String(error || 'Print failed'),
+  } as any);
 };
 
 // --- Stats ---

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Layout } from '../components/Layout';
 import { useParams, useNavigate } from 'react-router-dom';
-import { addGuestsBulk, getEventStats, updateGuest, updateEvent, deleteEvent, deleteGuest, clearEventGuests, markGuestIdPrinted } from '../services/db';
+import { addGuestsBulk, enqueuePrintJob, getEventStats, updateGuest, updateEvent, deleteEvent, deleteGuest, clearEventGuests, markGuestIdPrinted } from '../services/db';
 import { sendEmail, generateEmailTemplate } from '../services/email';
 import { sendWhatsAppInvite } from '../services/whatsapp';
 import { fileToBase64 } from '../services/utils';
@@ -46,6 +46,8 @@ export const EventDetails: React.FC = () => {
   const [autoPrintBusy, setAutoPrintBusy] = useState(false);
   const [printedThisSession, setPrintedThisSession] = useState<Set<string>>(new Set());
 
+  const [printJobs, setPrintJobs] = useState<any[]>([]);
+
   // CSV Mapping State
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
@@ -67,7 +69,7 @@ export const EventDetails: React.FC = () => {
   const [volunteerStats, setVolunteerStats] = useState<Record<string, number>>({});
   const [activeVolunteers, setActiveVolunteers] = useState<string[]>([]);
   const [showQrModal, setShowQrModal] = useState(false);
-  const [qrModalMode, setQrModalMode] = useState<'register' | 'spot'>('register');
+  const [qrModalMode, setQrModalMode] = useState<'register' | 'spot' | 'guest'>('register');
 
   // Delivery / Queue Logs
   const [logs, setLogs] = useState({
@@ -95,6 +97,15 @@ export const EventDetails: React.FC = () => {
       const evt = { id: snap.id, ...(snap.data() as object) } as Event;
       setEvent(evt);
       setEditForm(evt);
+    });
+    return () => unsub();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    const qJobs = query(collection(db, `events/${id}/printJobs`), orderBy('createdAt', 'desc'), limit(50));
+    const unsub = onSnapshot(qJobs, (snap) => {
+      setPrintJobs(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
     });
     return () => unsub();
   }, [id]);
@@ -441,9 +452,15 @@ export const EventDetails: React.FC = () => {
                     addToast('No valid data found in CSV', 'error');
                 }
             } catch (err) {
-                setUploadStatus('Error processing file.');
+                const msg = String((err as any)?.message || '');
+                if (msg === 'DUPLICATE_PHONE_IN_IMPORT') {
+                  setUploadStatus('Error: duplicate phone numbers detected in the CSV.');
+                  addToast('Duplicate phone numbers found in the CSV. Each guest must have a unique phone number for this event.', 'error');
+                } else {
+                  setUploadStatus('Error processing file.');
+                  addToast('Failed to process CSV file', 'error');
+                }
                 console.error(err);
-                addToast('Failed to process CSV file', 'error');
             }
         },
         error: () => setUploadStatus('Failed to parse CSV.')
@@ -925,6 +942,64 @@ export const EventDetails: React.FC = () => {
     return `${cleanBaseUrl}/#/spot-entry/${event.id}`;
   };
 
+  const getPrintStationLink = () => {
+    if (!event?.id) return '';
+    const baseUrl = window.location.href.split('#')[0];
+    const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    return `${cleanBaseUrl}/#/print-station/${event.id}`;
+  };
+
+  const getGuestEntryLink = () => {
+    if (!event?.id) return '';
+    const baseUrl = window.location.href.split('#')[0];
+    const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    return `${cleanBaseUrl}/#/guest-entry/${event.id}`;
+  };
+
+  const copyGuestEntryLink = () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(getGuestEntryLink()).then(() => {
+          addToast("Guest entry link copied!", 'success');
+        }).catch(() => {
+          const input = document.createElement('textarea');
+          input.value = getGuestEntryLink();
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand('copy');
+          document.body.removeChild(input);
+          addToast("Guest entry link copied!", 'success');
+        });
+      } else {
+        throw new Error('Clipboard API not available');
+      }
+    } catch (e) {
+      addToast("Could not copy link. Please copy manually: " + getGuestEntryLink(), 'warning');
+    }
+  };
+
+  const copyPrintStationLink = () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(getPrintStationLink()).then(() => {
+          addToast("Print station link copied!", 'success');
+        }).catch(() => {
+          const input = document.createElement('textarea');
+          input.value = getPrintStationLink();
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand('copy');
+          document.body.removeChild(input);
+          addToast("Print station link copied!", 'success');
+        });
+      } else {
+        throw new Error('Clipboard API not available');
+      }
+    } catch (e) {
+      addToast("Could not copy link. Please copy manually: " + getPrintStationLink(), 'warning');
+    }
+  };
+
   const copyRegistrationLink = () => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -992,12 +1067,20 @@ export const EventDetails: React.FC = () => {
                 <button onClick={() => setShowQrModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
                     <X size={24} />
                 </button>
-                <h3 className="text-xl font-bold text-slate-900 mb-2">{qrModalMode === 'spot' ? 'Spot Entry' : 'Scan to Register'}</h3>
-                <p className="text-slate-500 mb-6">{qrModalMode === 'spot' ? 'Guests can scan this at the entrance for instant check-in.' : 'Guests can scan this to open the registration form.'}</p>
-                {isValidQRValue(qrModalMode === 'spot' ? getSpotEntryLink() : getRegistrationLink()) ? (
+                <h3 className="text-xl font-bold text-slate-900 mb-2">
+                  {qrModalMode === 'spot' ? 'Spot Entry' : qrModalMode === 'guest' ? 'Self Check-in' : 'Scan to Register'}
+                </h3>
+                <p className="text-slate-500 mb-6">
+                  {qrModalMode === 'spot'
+                    ? 'Guests can scan this at the entrance for instant check-in.'
+                    : qrModalMode === 'guest'
+                      ? 'Guests can scan this and enter phone number to self check-in (no scanner required).'
+                      : 'Guests can scan this to open the registration form.'}
+                </p>
+                {isValidQRValue(qrModalMode === 'spot' ? getSpotEntryLink() : qrModalMode === 'guest' ? getGuestEntryLink() : getRegistrationLink()) ? (
                   <div className="bg-white p-4 rounded-xl border border-slate-200 inline-block mb-4 shadow-sm">
                     {/* Ensure QR code uses absolute URL */}
-                    <SafeQRCode value={qrModalMode === 'spot' ? getSpotEntryLink() : getRegistrationLink()} size={200} />
+                    <SafeQRCode value={qrModalMode === 'spot' ? getSpotEntryLink() : qrModalMode === 'guest' ? getGuestEntryLink() : getRegistrationLink()} size={200} />
                   </div>
                 ) : (
                   <div className="bg-slate-100 p-4 rounded-xl border border-slate-200 inline-block mb-4 text-slate-500 text-sm">
@@ -1005,9 +1088,11 @@ export const EventDetails: React.FC = () => {
                   </div>
                 )}
                 <div className="flex gap-2 justify-center">
-                    <button onClick={qrModalMode === 'spot' ? copySpotEntryLink : copyRegistrationLink} className="text-indigo-600 text-sm font-medium hover:underline">Copy Link</button>
+                    <button onClick={qrModalMode === 'spot' ? copySpotEntryLink : qrModalMode === 'guest' ? copyGuestEntryLink : copyRegistrationLink} className="text-indigo-600 text-sm font-medium hover:underline">Copy Link</button>
                     <span className="text-slate-300">|</span>
-                    <button onClick={() => window.open(qrModalMode === 'spot' ? getSpotEntryLink() : getRegistrationLink(), '_blank')} className="text-indigo-600 text-sm font-medium hover:underline">{qrModalMode === 'spot' ? 'Open Spot Entry' : 'Open Form'}</button>
+                    <button onClick={() => window.open(qrModalMode === 'spot' ? getSpotEntryLink() : qrModalMode === 'guest' ? getGuestEntryLink() : getRegistrationLink(), '_blank')} className="text-indigo-600 text-sm font-medium hover:underline">
+                      {qrModalMode === 'spot' ? 'Open Spot Entry' : qrModalMode === 'guest' ? 'Open Self Check-in' : 'Open Form'}
+                    </button>
                 </div>
             </div>
         </div>
@@ -1028,42 +1113,12 @@ export const EventDetails: React.FC = () => {
                 </p>
             </div>
             <div className="flex gap-3">
-                 <button 
-                    onClick={() => { setQrModalMode('register'); setShowQrModal(true); }}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white border border-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
-                 >
-                    <QrCode size={16} /> Show QR
-                 </button>
-                 <button 
-                    onClick={() => { setQrModalMode('spot'); setShowQrModal(true); }}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white border border-green-600 rounded-lg hover:bg-green-700 transition-colors shadow-sm"
-                 >
-                    <QrCode size={16} /> Spot Entry QR
-                 </button>
-                 <button 
-                    onClick={copyRegistrationLink}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
-                 >
-                    <Copy size={16} /> Copy Reg. Link
-                 </button>
-                 <button 
-                    onClick={copySpotEntryLink}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
-                 >
-                    <Copy size={16} /> Copy Spot Link
-                 </button>
-                 <button 
-                    onClick={() => window.open(getRegistrationLink(), '_blank')}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
-                 >
-                    <ExternalLink size={16} /> Open Form
-                 </button>
-                 <button 
-                    onClick={() => window.open(getSpotEntryLink(), '_blank')}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
-                 >
-                    <ExternalLink size={16} /> Open Spot
-                 </button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <Settings size={16} /> Settings
+              </button>
             </div>
         </div>
 
@@ -1112,52 +1167,88 @@ export const EventDetails: React.FC = () => {
         </div>
       </div>
       
-      {/* Live Activity Feed - New Section */}
+      {/* Live Activity Feed */}
       <div className="mb-8">
-           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                    <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                        <Activity size={18} className="text-indigo-600" /> 
-                        Live Check-in Feed
-                    </h3>
-                    <div className="flex items-center gap-2">
-                        <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                        </span>
-                        <span className="text-xs text-slate-500">Auto-updating</span>
-                    </div>
-                </div>
-                <div className="divide-y divide-slate-100">
-                    {recentActivity.length > 0 ? recentActivity.map(guest => (
-                        <div key={guest.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold">
-                                    {guest.name.charAt(0)}
-                                </div>
-                                <div>
-                                    <p className="font-medium text-slate-900">{guest.name}</p>
-                                    <p className="text-xs text-slate-500">{guest.email}</p>
-                                </div>
-                            </div>
-                            <div className="text-right">
-                                 <p className="text-xs font-bold text-slate-700">
-                                    {guest.checkedInAt ? new Date(guest.checkedInAt).toLocaleTimeString() : ''}
-                                 </p>
-                                 <p className="text-[10px] text-slate-400 uppercase tracking-wide flex items-center justify-end gap-1">
-                                    <UserCheck size={10} />
-                                    {guest.verifiedBy || 'Admin'}
-                                 </p>
-                            </div>
-                        </div>
-                    )) : (
-                        <div className="p-8 text-center text-slate-500 text-sm flex flex-col items-center">
-                            <CircleDashed size={32} className="text-slate-300 mb-2" />
-                            <p>No check-ins yet. Waiting for guests...</p>
-                        </div>
-                    )}
-                </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                <Activity size={18} className="text-indigo-600" />
+                Live Check-in Feed
+              </h3>
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+                <span className="text-xs text-slate-500">Auto-updating</span>
+              </div>
             </div>
+            <div className="divide-y divide-slate-100">
+              {recentActivity.length > 0 ? recentActivity.map(guest => (
+                <div key={guest.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold">
+                      {guest.name.charAt(0)}
+                    </div>
+                    <div>
+                      <p className="font-medium text-slate-900">{guest.name}</p>
+                      <p className="text-xs text-slate-500">{guest.email || guest.phone || ''}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-bold text-slate-700">
+                      {guest.checkedInAt ? new Date(guest.checkedInAt).toLocaleTimeString() : ''}
+                    </p>
+                    <p className="text-[10px] text-slate-400 uppercase tracking-wide flex items-center justify-end gap-1">
+                      <UserCheck size={10} />
+                      {guest.verifiedBy || 'Admin'}
+                    </p>
+                  </div>
+                </div>
+              )) : (
+                <div className="p-8 text-center text-slate-500 text-sm flex flex-col items-center">
+                  <CircleDashed size={32} className="text-slate-300 mb-2" />
+                  <p>No check-ins yet. Waiting for guests...</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="font-bold text-slate-900">Live Stats</h3>
+              <div className="text-xs text-slate-500">Updates in real-time</div>
+            </div>
+            <div className="p-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-green-50 border border-green-100 rounded-xl p-4">
+                  <div className="text-xs uppercase tracking-wider text-green-700 font-bold">Guests Arrived</div>
+                  <div className="text-3xl font-black text-green-800 mt-1">{stats.checkedIn}</div>
+                  <div className="text-xs text-green-700 mt-1">of {stats.total}</div>
+                </div>
+
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
+                  <div className="text-xs uppercase tracking-wider text-indigo-700 font-bold">Attendees Arrived</div>
+                  <div className="text-3xl font-black text-indigo-800 mt-1">{stats.attendeesCheckedIn}</div>
+                  <div className="text-xs text-indigo-700 mt-1">of {stats.attendeesTotal}</div>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
+                  <div className="text-xs uppercase tracking-wider text-amber-700 font-bold">Extra With Guests</div>
+                  <div className="text-3xl font-black text-amber-800 mt-1">{Math.max(0, (stats.attendeesCheckedIn || 0) - (stats.checkedIn || 0))}</div>
+                  <div className="text-xs text-amber-700 mt-1">(Adults + children)</div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <div className="text-xs uppercase tracking-wider text-slate-600 font-bold">Remaining Guests</div>
+                  <div className="text-3xl font-black text-slate-900 mt-1">{stats.remaining}</div>
+                  <div className="text-xs text-slate-500 mt-1">not checked-in yet</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Guest Details Modal & Tabs */}
@@ -2041,6 +2132,236 @@ export const EventDetails: React.FC = () => {
                 <div className="max-w-3xl mx-auto">
                      {/* Settings form JSX remains mostly unchanged, relies on async handleUpdateEvent */}
                      <form onSubmit={handleUpdateEvent} className="space-y-6">
+                        <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
+                          <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+                            <QrCode size={20} /> Registration & Spot Entry
+                          </h3>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-2">General Registration</div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => { setQrModalMode('register'); setShowQrModal(true); }}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                >
+                                  <QrCode size={16} /> Show QR
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={copyRegistrationLink}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                >
+                                  <Copy size={16} /> Copy Link
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => window.open(getRegistrationLink(), '_blank')}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                >
+                                  <ExternalLink size={16} /> Open
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-2">Spot Entry (Instant Check-in)</div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => { setQrModalMode('spot'); setShowQrModal(true); }}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                                >
+                                  <QrCode size={16} /> Show QR
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={copySpotEntryLink}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                >
+                                  <Copy size={16} /> Copy Link
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => window.open(getSpotEntryLink(), '_blank')}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                >
+                                  <ExternalLink size={16} /> Open
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-2">Guest Self Check-in (By Phone)</div>
+                              <div className="text-xs text-slate-500 mb-3">Guest scans QR, enters phone, confirms entry. Badge print job is queued automatically.</div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => { setQrModalMode('guest'); setShowQrModal(true); }}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800"
+                                >
+                                  <QrCode size={16} /> Show QR
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={copyGuestEntryLink}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                >
+                                  <Copy size={16} /> Copy Link
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => window.open(getGuestEntryLink(), '_blank')}
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                >
+                                  <ExternalLink size={16} /> Open
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
+                          <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+                            <Printer size={20} /> Print Stations (Multi-Printers)
+                          </h3>
+
+                          <div className="bg-white border border-slate-200 rounded-lg p-4">
+                            <div className="text-sm font-semibold text-slate-900 mb-2">Print Station Link</div>
+                            <div className="text-xs text-slate-500 mb-3">Open this link on each printer device (PC/tablet). Each station will auto-claim jobs so printers do not clash.</div>
+
+                            <div className="flex flex-wrap gap-2 mb-3">
+                              <button
+                                type="button"
+                                onClick={copyPrintStationLink}
+                                className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                              >
+                                <Copy size={16} /> Copy Link
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => window.open(getPrintStationLink(), '_blank')}
+                                className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                              >
+                                <ExternalLink size={16} /> Open Print Station
+                              </button>
+                            </div>
+
+                            <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 font-mono break-all">{getPrintStationLink()}</div>
+                          </div>
+
+                          <div className="mt-4 bg-white border border-slate-200 rounded-lg p-4">
+                            <div className="text-sm font-semibold text-slate-900 mb-2">3 Printer Setup (Quick Steps)</div>
+                            <div className="text-sm text-slate-700 space-y-2">
+                              <div>1) Connect Printer 1 to PC/Tablet 1 and open the print station link.</div>
+                              <div>2) Connect Printer 2 to PC/Tablet 2 and open the same link.</div>
+                              <div>3) Connect Printer 3 to PC/Tablet 3 and open the same link.</div>
+                              <div>4) On each station page, keep <span className="font-semibold">Auto Print: ON</span>.</div>
+                              <div>5) When Scanner/Spot Entry checks-in a guest, stations will claim jobs automatically (no double printing).</div>
+                              <div className="text-xs text-slate-500">Note: browsers may still show the print dialog. Set each station browser/printer defaults for faster flow.</div>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 bg-white border border-slate-200 rounded-lg p-4">
+                            <div className="text-sm font-semibold text-slate-900 mb-3">Print Queue Monitor</div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                              {(() => {
+                                const counts = { queued: 0, claimed: 0, printed: 0, failed: 0 } as any;
+                                for (const j of printJobs) {
+                                  const s = String((j as any).status || '');
+                                  if (s in counts) counts[s] += 1;
+                                }
+                                return (
+                                  <>
+                                    <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+                                      <div className="text-[11px] uppercase tracking-wider text-indigo-700 font-bold">Queued</div>
+                                      <div className="text-2xl font-black text-indigo-800">{counts.queued}</div>
+                                    </div>
+                                    <div className="bg-amber-50 border border-amber-100 rounded-lg p-3">
+                                      <div className="text-[11px] uppercase tracking-wider text-amber-700 font-bold">Claimed</div>
+                                      <div className="text-2xl font-black text-amber-800">{counts.claimed}</div>
+                                    </div>
+                                    <div className="bg-green-50 border border-green-100 rounded-lg p-3">
+                                      <div className="text-[11px] uppercase tracking-wider text-green-700 font-bold">Printed</div>
+                                      <div className="text-2xl font-black text-green-800">{counts.printed}</div>
+                                    </div>
+                                    <div className="bg-red-50 border border-red-100 rounded-lg p-3">
+                                      <div className="text-[11px] uppercase tracking-wider text-red-700 font-bold">Failed</div>
+                                      <div className="text-2xl font-black text-red-800">{counts.failed}</div>
+                                    </div>
+                                  </>
+                                );
+                              })()}
+                            </div>
+
+                            <div className="text-xs text-slate-500 mb-2">Recent print jobs (latest 50)</div>
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                              <div className="divide-y divide-slate-100 max-h-64 overflow-auto">
+                                {printJobs.length ? printJobs.map((j: any) => (
+                                  <div key={j.id} className="p-3 text-sm flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="font-mono text-xs text-slate-500 truncate">{j.id}</div>
+                                      <div className="text-slate-900 truncate">Guest: <span className="font-mono">{j.guestId}</span></div>
+                                      <div className="text-xs text-slate-500 truncate">Status: <span className="font-semibold">{String(j.status || '')}</span> {j.stationId ? `• Station: ${j.stationId}` : ''}</div>
+                                      {j.error ? <div className="text-xs text-red-600 truncate">{String(j.error)}</div> : null}
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      {String(j.status || '') === 'failed' ? (
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              await enqueuePrintJob(event.id, String(j.guestId), 'requeue-failed', 'Admin');
+                                              addToast('Requeued failed print job', 'success');
+                                            } catch (e) {
+                                              addToast('Failed to requeue job', 'error');
+                                            }
+                                          }}
+                                          className="px-3 py-2 text-xs font-bold bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                                        >
+                                          Requeue
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                )) : (
+                                  <div className="p-6 text-sm text-slate-500">No print jobs yet.</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
+                          <h3 className="text-lg font-bold text-slate-900 mb-4">Setup Guide (How to use EventFlow)</h3>
+                          <div className="space-y-4 text-sm text-slate-700">
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-1">1) Registration (Public)</div>
+                              <div>Use <span className="font-semibold">Registration & Spot Entry</span> section above to copy/open the registration link or QR. Guests can register with unique phone numbers.</div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-1">2) Spot Entry (Instant Check-in)</div>
+                              <div>Spot Entry is for rush mode: guest enters name + phone + extra attendees and gets checked-in immediately. A print job is queued automatically.</div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-1">3) Volunteer Scanner</div>
+                              <div>Volunteers login using the event’s volunteer access code, then scan guest QR to check-in. Scanner also supports manual search by phone/email/ticket/id.</div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-1">4) Print Stations</div>
+                              <div>Open the print station link on each printer device. Stations auto-claim print jobs so multiple printers work together without clashes.</div>
+                              <div className="text-xs text-slate-500 mt-2">
+                                Tip: Use one dedicated browser tab per printer. Set default printer on that device. For fastest flow, use kiosk/fullscreen mode and keep the print station page open.
+                              </div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-4">
+                              <div className="font-semibold text-slate-900 mb-1">5) Email + WhatsApp Setup</div>
+                              <div>Configure Email + WhatsApp from the Settings tab sections. After setup, you can send invites from the guest list. WhatsApp status logs are available in Logs.</div>
+                            </div>
+                          </div>
+                        </div>
+
                         <div className="bg-slate-50 p-6 rounded-lg border border-slate-200">
                             <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                                 <Settings size={20} /> Event Details
