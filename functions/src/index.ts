@@ -1,6 +1,8 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import nodemailer from 'nodemailer';
+import twilio from 'twilio';
+import { SNSClient, PublishCommand } from '@aws-sdk/client-sns';
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -38,6 +40,18 @@ interface QueuedEmail {
    status?: string;
    retries?: number;
  }
+
+interface QueuedSms {
+  to: string;
+  originalTo?: string;
+  message: string;
+  userId: string;
+  provider?: string;
+  eventId?: string | null;
+  guestId?: string | null;
+  status?: string;
+  retries?: number;
+}
 
 const asNonNegativeInt = (v: unknown, fallback: number) => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -261,6 +275,229 @@ export const processQueuedEmail = functions.firestore
         error: err && err.message ? err.message : String(err),
         retries: prevRetries + 1,
       });
+    }
+  });
+
+export const processQueuedSms = functions.firestore
+  .document('queuedSms/{docId}')
+  .onCreate(async (snap, ctx) => {
+    const data = snap.data() as QueuedSms;
+    const docId = ctx.params.docId;
+
+    const normalizedTo = normalizeE164(data.to);
+    if (!normalizedTo.ok) {
+      await snap.ref.update({ status: 'failed', error: normalizedTo.error });
+      await db.collection('failedSms').add({
+        queuedId: docId,
+        to: String(data.to || ''),
+        originalTo: data.originalTo || null,
+        message: String((data as any).message || ''),
+        error: normalizedTo.error,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        eventId: data.eventId || null,
+        guestId: data.guestId || null,
+      });
+      return;
+    }
+
+    console.log('Processing queuedSms', {
+      docId,
+      to: normalizedTo.value,
+      userId: data.userId,
+      provider: data.provider,
+      eventId: data.eventId || null,
+      guestId: data.guestId || null,
+    });
+
+    try {
+      const locked = await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(snap.ref);
+        const cur: any = fresh.data() || {};
+        const status = String(cur.status || 'queued');
+        if (status !== 'queued') return false;
+        tx.update(snap.ref, {
+          status: 'processing',
+          processingAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return true;
+      });
+      if (!locked) return;
+    } catch (e) {
+      return;
+    }
+
+    // If this invite is tied to a guest, avoid double-sending if already sent.
+    if (data.guestId) {
+      try {
+        const guestRef = db.collection('guests').doc(String(data.guestId));
+        const gs = await guestRef.get();
+        if (gs.exists) {
+          const g: any = gs.data() || {};
+          if (String(g.inviteSmsStatus || '') === 'sent') {
+            await snap.ref.update({ status: 'skipped', skippedAt: admin.firestore.FieldValue.serverTimestamp(), error: 'Already sent' });
+            return;
+          }
+          await guestRef.set(
+            {
+              inviteSmsStatus: 'sending',
+            },
+            { merge: true }
+          );
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    let cfgDoc: FirebaseFirestore.DocumentSnapshot | null = null;
+    try {
+      cfgDoc = await db.collection('smsSettings').doc(data.userId).get();
+    } catch (e) {
+      console.warn('Failed to fetch smsSettings', e);
+    }
+
+    const cfg = cfgDoc && cfgDoc.exists ? (cfgDoc.data() as any) : null;
+
+    try {
+      if (!cfg || !cfg.provider || cfg.provider === 'none') {
+        await db.collection('failedSms').add({
+          queuedId: docId,
+          to: normalizedTo.value,
+          originalTo: data.originalTo || null,
+          message: String((data as any).message || ''),
+          reason: 'No SMS configuration available for user',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          eventId: data.eventId || null,
+          guestId: data.guestId || null,
+        });
+        console.warn('No SMS configuration for user', data.userId);
+        await snap.ref.update({ status: 'failed', error: 'No SMS configuration available for user' });
+        return;
+      }
+
+      const provider = String(cfg.provider || data.provider || '').trim();
+      const body = String((data as any).message || '');
+      if (!body.trim()) throw new Error('Missing SMS message body');
+
+      let messageId: string | null = null;
+
+      if (provider === 'twilio') {
+        if (!cfg.twilioAccountSid || !cfg.twilioAuthToken || !cfg.twilioFromNumber) {
+          throw new Error('Twilio SMS config incomplete');
+        }
+        const client = twilio(String(cfg.twilioAccountSid), String(cfg.twilioAuthToken));
+        const resp = await client.messages.create({
+          to: normalizedTo.value,
+          from: String(cfg.twilioFromNumber),
+          body,
+        });
+        messageId = resp && resp.sid ? String(resp.sid) : null;
+
+        await db.collection('sentSms').add({
+          queuedId: docId,
+          to: normalizedTo.value,
+          originalTo: data.originalTo || null,
+          message: body,
+          provider: 'twilio',
+          responseBody: resp,
+          messageId,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          eventId: data.eventId || null,
+          guestId: data.guestId || null,
+        });
+      } else if (provider === 'aws_sns') {
+        if (!cfg.awsAccessKeyId || !cfg.awsSecretAccessKey || !cfg.awsRegion) {
+          throw new Error('AWS SNS SMS config incomplete');
+        }
+
+        const client = new SNSClient({
+          region: String(cfg.awsRegion),
+          credentials: {
+            accessKeyId: String(cfg.awsAccessKeyId),
+            secretAccessKey: String(cfg.awsSecretAccessKey),
+          },
+        });
+
+        const attrs: any = {};
+        if (cfg.awsSenderId) {
+          attrs.AWS.SNS.SMS.SenderID = { DataType: 'String', StringValue: String(cfg.awsSenderId) };
+        }
+
+        const cmd = new PublishCommand({
+          PhoneNumber: normalizedTo.value,
+          Message: body,
+          MessageAttributes: Object.keys(attrs).length ? attrs : undefined,
+        });
+        const resp = await client.send(cmd);
+        messageId = resp && resp.MessageId ? String(resp.MessageId) : null;
+
+        await db.collection('sentSms').add({
+          queuedId: docId,
+          to: normalizedTo.value,
+          originalTo: data.originalTo || null,
+          message: body,
+          provider: 'aws_sns',
+          responseBody: resp,
+          messageId,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          eventId: data.eventId || null,
+          guestId: data.guestId || null,
+        });
+      } else {
+        throw new Error(`Unsupported SMS provider: ${provider}`);
+      }
+
+      await snap.ref.update({ status: 'sent', processedAt: admin.firestore.FieldValue.serverTimestamp() });
+
+      if (data.guestId) {
+        try {
+          await db.collection('guests').doc(String(data.guestId)).set(
+            {
+              inviteSmsStatus: 'sent',
+              inviteSmsSentAt: new Date().toISOString(),
+              inviteSmsMessageId: messageId,
+              inviteSmsLastError: null,
+              inviteSent: true,
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          // ignore
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to send queued SMS', err);
+      await db.collection('failedSms').add({
+        queuedId: docId,
+        to: normalizedTo.value,
+        originalTo: data.originalTo || null,
+        message: String((data as any).message || ''),
+        error: err && err.message ? err.message : String(err),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        eventId: data.eventId || null,
+        guestId: data.guestId || null,
+      });
+      const prevRetries = asNonNegativeInt((data as any).retries, 0);
+      await snap.ref.update({
+        status: 'failed',
+        error: err && err.message ? err.message : String(err),
+        retries: prevRetries + 1,
+      });
+
+      if (data.guestId) {
+        try {
+          await db.collection('guests').doc(String(data.guestId)).set(
+            {
+              inviteSmsStatus: 'failed',
+              inviteSmsFailedAt: new Date().toISOString(),
+              inviteSmsLastError: err && err.message ? err.message : String(err),
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          // ignore
+        }
+      }
     }
   });
 

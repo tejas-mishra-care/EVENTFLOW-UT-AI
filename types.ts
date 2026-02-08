@@ -71,6 +71,12 @@ export interface Guest {
   inviteWhatsAppFailedAt?: string;
   inviteWhatsAppLastError?: string;
   inviteWhatsAppMessageId?: string;
+  inviteSmsStatus?: 'none' | 'queued' | 'sending' | 'sent' | 'failed';
+  inviteSmsQueuedAt?: string;
+  inviteSmsSentAt?: string;
+  inviteSmsFailedAt?: string;
+  inviteSmsLastError?: string;
+  inviteSmsMessageId?: string;
   extraAdults?: number;
   extraChildren?: number;
   totalAttendees?: number;

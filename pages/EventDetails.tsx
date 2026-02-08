@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { addGuestsBulk, enqueuePrintJob, getEventStats, updateGuest, updateEvent, deleteEvent, deleteGuest, clearEventGuests, markGuestIdPrinted } from '../services/db';
 import { sendEmail, generateEmailTemplate } from '../services/email';
 import { sendWhatsAppInvite } from '../services/whatsapp';
+import { queueSmsInvite } from '../services/sms';
 import { fileToBase64 } from '../services/utils';
 import { Event, Guest, FormField } from '../types';
 import { IDCard } from '../components/IDCard';
@@ -12,7 +13,7 @@ import { WhatsAppSettings } from '../components/WhatsAppSettings';
 import { SmsSettings } from '../components/SmsSettings';
 import Papa from 'papaparse';
 import SafeQRCode from '../components/SafeQRCode';
-import { Upload, Download, Mail, Search, CheckCircle, Copy, ExternalLink, Send, Settings, Save, Trash2, Image as ImageIcon, Plus, X, Activity, ArrowRight, Eye, LayoutTemplate, Printer, Edit2, RotateCcw, Filter, UserCheck, CircleDashed, CheckSquare, Square, QrCode, MessageCircle } from 'lucide-react';
+import { Upload, Download, Mail, Search, CheckCircle, Copy, ExternalLink, Send, Settings, Save, Trash2, Image as ImageIcon, Plus, X, Activity, ArrowRight, Eye, LayoutTemplate, Printer, Edit2, RotateCcw, Filter, UserCheck, CircleDashed, CheckSquare, Square, QrCode, MessageCircle, MessageSquare } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { getCurrentUser } from '../services/db';
 import { db } from '../services/firebase';
@@ -35,7 +36,7 @@ export const EventDetails: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
   const [sendingInvites, setSendingInvites] = useState(false);
-  const [inviteChannel, setInviteChannel] = useState<'email' | 'whatsapp' | 'both'>('email');
+  const [inviteChannel, setInviteChannel] = useState<'email' | 'whatsapp' | 'sms' | 'both' | 'all'>('email');
   
   // Guest Detail Modal State
   const [selectedGuest, setSelectedGuest] = useState<Guest | null>(null);
@@ -85,9 +86,12 @@ export const EventDetails: React.FC = () => {
     queuedWhatsApps: [] as any[],
     sentWhatsApps: [] as any[],
     failedWhatsApps: [] as any[],
+    queuedSms: [] as any[],
+    sentSms: [] as any[],
+    failedSms: [] as any[],
   });
 
-  const [logChannelFilter, setLogChannelFilter] = useState<'all' | 'whatsapp' | 'email'>('whatsapp');
+  const [logChannelFilter, setLogChannelFilter] = useState<'all' | 'whatsapp' | 'email' | 'sms'>('whatsapp');
   const [logSearch, setLogSearch] = useState('');
   
   // Email Settings Modal
@@ -362,6 +366,18 @@ export const EventDetails: React.FC = () => {
 
     unsubs.push(onSnapshot(query(collection(db, 'failedWhatsApps'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
       setLogs(prev => ({ ...prev, failedWhatsApps: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'queuedSms'), where('eventId', '==', id), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, queuedSms: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'sentSms'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, sentSms: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
+    }));
+
+    unsubs.push(onSnapshot(query(collection(db, 'failedSms'), where('eventId', '==', id), orderBy('createdAt', 'desc'), limit(25)), (snap) => {
+      setLogs(prev => ({ ...prev, failedSms: snap.docs.map(d => ({ id: d.id, ...(d.data() as object) })) }));
     }));
 
     return () => {
@@ -665,9 +681,17 @@ export const EventDetails: React.FC = () => {
       const waInFlight = waStatus === 'queued' || waStatus === 'sending';
       const waSent = waStatus === 'sent' || !!(g.inviteSentWhatsApp || false);
       const waAlreadyAttempted = waInFlight || waSent;
+
+      const smsStatus = (g as any).inviteSmsStatus as (Guest['inviteSmsStatus'] | undefined);
+      const smsInFlight = smsStatus === 'queued' || smsStatus === 'sending';
+      const smsSent = smsStatus === 'sent';
+      const smsAlreadyAttempted = smsInFlight || smsSent;
+
       if (inviteChannel === 'email') return !emailSent;
       if (inviteChannel === 'whatsapp') return !waAlreadyAttempted;
-      return !emailSent || !waSent;
+      if (inviteChannel === 'sms') return !smsAlreadyAttempted;
+      if (inviteChannel === 'both') return !emailSent || !waSent;
+      return !emailSent || !waSent || !smsSent;
     });
     
     if (guestsToInvite.length === 0) {
@@ -675,7 +699,16 @@ export const EventDetails: React.FC = () => {
         return;
     }
 
-    const channelLabel = inviteChannel === 'both' ? 'Email + WhatsApp' : inviteChannel === 'email' ? 'Email' : 'WhatsApp';
+    const channelLabel =
+      inviteChannel === 'all'
+        ? 'Email + WhatsApp + SMS'
+        : inviteChannel === 'both'
+          ? 'Email + WhatsApp'
+          : inviteChannel === 'email'
+            ? 'Email'
+            : inviteChannel === 'whatsapp'
+              ? 'WhatsApp'
+              : 'SMS';
     if (!window.confirm(`Send ${channelLabel} invitations to ${guestsToInvite.length} guests?`)) return;
 
     setSendingInvites(true);
@@ -688,8 +721,13 @@ export const EventDetails: React.FC = () => {
                 const waInFlight = waStatus === 'queued' || waStatus === 'sending';
                 const waAlreadySent = waStatus === 'sent' || !!(guest.inviteSentWhatsApp || false);
 
-                const shouldSendEmail = (inviteChannel === 'email' || inviteChannel === 'both') && !emailAlreadySent;
-                const shouldSendWhatsApp = (inviteChannel === 'whatsapp' || inviteChannel === 'both') && !waInFlight && !waAlreadySent;
+                const smsStatus = (guest as any).inviteSmsStatus as (Guest['inviteSmsStatus'] | undefined);
+                const smsInFlight = smsStatus === 'queued' || smsStatus === 'sending';
+                const smsAlreadySent = smsStatus === 'sent';
+
+                const shouldSendEmail = (inviteChannel === 'email' || inviteChannel === 'both' || inviteChannel === 'all') && !emailAlreadySent;
+                const shouldSendWhatsApp = (inviteChannel === 'whatsapp' || inviteChannel === 'both' || inviteChannel === 'all') && !waInFlight && !waAlreadySent;
+                const shouldSendSms = (inviteChannel === 'sms' || inviteChannel === 'all') && !smsInFlight && !smsAlreadySent;
 
                 const updates: Partial<Guest> = {};
                 let invitedAny = false;
@@ -722,6 +760,23 @@ export const EventDetails: React.FC = () => {
                   }
                 }
 
+                if (shouldSendSms && guest.phone && guest.phone.trim()) {
+                  const ticketCode = (guest.ticketCode || guest.qrCode);
+                  const msg = `EventFlow: Hi ${guest.name}, you are invited to ${event.name}. Ticket: ${ticketCode}. Show this at entry.`;
+                  const smsRes = await queueSmsInvite(
+                    guest.phone,
+                    msg,
+                    user.id,
+                    { eventId: event.id, guestId: guest.id }
+                  );
+                  if (smsRes.success) {
+                    (updates as any).inviteSmsStatus = 'queued';
+                    (updates as any).inviteSmsQueuedAt = new Date().toISOString();
+                  } else {
+                    console.warn('SMS not queued for', guest.phone, smsRes.message);
+                  }
+                }
+
                 if (invitedAny) {
                   updates.inviteSent = true;
                 }
@@ -731,7 +786,7 @@ export const EventDetails: React.FC = () => {
                 }
             }
         }
-                addToast(`Invitations processed for ${guestsToInvite.length} guests. Check failedEmails / failedWhatsApps in Firestore for errors.`, 'info');
+                addToast(`Invitations processed for ${guestsToInvite.length} guests. Check failedEmails / failedWhatsApps / failedSms in Firestore for errors.`, 'info');
     } catch (e) {
         addToast("Error processing invitations. Check Firebase connection.", 'error');
     } finally {
@@ -1751,7 +1806,9 @@ export const EventDetails: React.FC = () => {
                               >
                                 <option value="email">Email</option>
                                 <option value="whatsapp">WhatsApp</option>
-                                <option value="both">Both</option>
+                                <option value="sms">SMS</option>
+                                <option value="both">Email + WhatsApp</option>
+                                <option value="all">All (Email + WhatsApp + SMS)</option>
                               </select>
 
                              <button 
@@ -2104,6 +2161,12 @@ export const EventDetails: React.FC = () => {
                           Email
                         </button>
                         <button
+                          onClick={() => setLogChannelFilter('sms')}
+                          className={`px-3 py-2 rounded-lg border text-sm font-semibold ${logChannelFilter === 'sms' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                        >
+                          SMS
+                        </button>
+                        <button
                           onClick={() => setLogChannelFilter('all')}
                           className={`px-3 py-2 rounded-lg border text-sm font-semibold ${logChannelFilter === 'all' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
                         >
@@ -2314,6 +2377,52 @@ export const EventDetails: React.FC = () => {
                             </div>
                           );
                         }) : <div className="p-6 text-sm text-slate-500">No failed WhatsApps</div>}
+                      </div>
+                    </div>
+                    )}
+
+                    {(logChannelFilter === 'all' || logChannelFilter === 'sms') && (
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Queued SMS ({sortLogsNewestFirst(logs.queuedSms).filter(logMatchesSearch).length})</div>
+                      <div className="divide-y divide-slate-100">
+                        {sortLogsNewestFirst(logs.queuedSms).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.queuedSms).filter(logMatchesSearch).map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-500 truncate">{String(r.message || '')}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)} {r.status ? `• ${r.status}` : ''}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No queued SMS</div>}
+                      </div>
+                    </div>
+                    )}
+
+                    {(logChannelFilter === 'all' || logChannelFilter === 'sms') && (
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Sent SMS ({sortLogsNewestFirst(logs.sentSms).filter(logMatchesSearch).length})</div>
+                      <div className="divide-y divide-slate-100">
+                        {sortLogsNewestFirst(logs.sentSms).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.sentSms).filter(logMatchesSearch).map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-500 truncate">{String(r.message || '')}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)} {r.provider ? `• ${r.provider}` : ''}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No sent SMS</div>}
+                      </div>
+                    </div>
+                    )}
+
+                    {(logChannelFilter === 'all' || logChannelFilter === 'sms') && (
+                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-slate-100 font-bold text-slate-900">Failed SMS ({sortLogsNewestFirst(logs.failedSms).filter(logMatchesSearch).length})</div>
+                      <div className="divide-y divide-slate-100">
+                        {sortLogsNewestFirst(logs.failedSms).filter(logMatchesSearch).length ? sortLogsNewestFirst(logs.failedSms).filter(logMatchesSearch).map((r: any) => (
+                          <div key={r.id} className="p-4 text-sm">
+                            <div className="font-medium text-slate-900">{r.to}</div>
+                            <div className="text-xs text-slate-500 truncate">{String(r.message || '')}</div>
+                            <div className="text-xs text-red-600">{String(r.error || r.reason || 'Failed')}</div>
+                            <div className="text-xs text-slate-400">{getLogTime(r)}</div>
+                          </div>
+                        )) : <div className="p-6 text-sm text-slate-500">No failed SMS</div>}
                       </div>
                     </div>
                     )}
