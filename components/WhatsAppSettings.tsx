@@ -76,7 +76,7 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
         w.fbAsyncInit = function () {
           try {
             w.FB.init({
-              appId: String((import.meta as any).env?.VITE_FACEBOOK_APP_ID || ''),
+              appId: String(import.meta.env.VITE_FACEBOOK_APP_ID || ''),
               cookie: true,
               xfbml: false,
               version: 'v22.0',
@@ -104,8 +104,8 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
 
   const handleConnectEmbeddedSignup = async () => {
     if (!user) return;
-    const appId = String((import.meta as any).env?.VITE_FACEBOOK_APP_ID || '').trim();
-    const configId = String((import.meta as any).env?.VITE_FACEBOOK_CONFIG_ID || '').trim();
+    const appId = String(import.meta.env.VITE_FACEBOOK_APP_ID || '').trim();
+    const configId = String(import.meta.env.VITE_FACEBOOK_CONFIG_ID || '').trim();
     if (!appId || !configId) {
       addToast('Missing WhatsApp connect configuration (VITE_FACEBOOK_APP_ID / VITE_FACEBOOK_CONFIG_ID).', 'error');
       return;
