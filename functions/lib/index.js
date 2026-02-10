@@ -26,7 +26,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.syncEventStatsOnGuestWrite = exports.processQueuedWhatsApp = exports.processQueuedSms = exports.processQueuedEmail = void 0;
+exports.syncEventStatsOnGuestWrite = exports.processQueuedWhatsApp = exports.processQueuedSms = exports.processQueuedEmail = exports.connectWhatsAppEmbeddedSignup = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const nodemailer_1 = __importDefault(require("nodemailer"));
@@ -52,6 +52,130 @@ const normalizeE164 = (raw) => {
         return { ok: false, error: 'Invalid E.164 phone number' };
     return { ok: true, value };
 };
+const getMetaConfig = () => {
+    const cfg = functions.config();
+    const appId = String(cfg?.meta?.app_id || '').trim();
+    const appSecret = String(cfg?.meta?.app_secret || '').trim();
+    const redirectUri = String(cfg?.meta?.redirect_uri || 'https://www.facebook.com/connect/login_success.html').trim();
+    const apiVersion = String(cfg?.meta?.api_version || 'v22.0').trim();
+    return { appId, appSecret, redirectUri, apiVersion };
+};
+const graphFetchJson = async (url) => {
+    const resp = await fetch(url, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    });
+    const text = await resp.text();
+    let json = null;
+    try {
+        json = JSON.parse(text);
+    }
+    catch (_e) {
+        json = { raw: text };
+    }
+    if (!resp.ok) {
+        throw new Error(`Meta Graph API error (${resp.status}): ${JSON.stringify(json)}`);
+    }
+    return json;
+};
+exports.connectWhatsAppEmbeddedSignup = functions.https.onCall(async (data, context) => {
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', 'You must be logged in.');
+    }
+    const code = String(data?.code || '').trim();
+    if (!code) {
+        throw new functions.https.HttpsError('invalid-argument', 'Missing OAuth code.');
+    }
+    const meta = getMetaConfig();
+    if (!meta.appId || !meta.appSecret) {
+        throw new functions.https.HttpsError('failed-precondition', 'Meta app config missing on server.');
+    }
+    const userId = context.auth.uid;
+    try {
+        const tokenUrl = `https://graph.facebook.com/${encodeURIComponent(meta.apiVersion)}/oauth/access_token` +
+            `?client_id=${encodeURIComponent(meta.appId)}` +
+            `&client_secret=${encodeURIComponent(meta.appSecret)}` +
+            `&redirect_uri=${encodeURIComponent(meta.redirectUri)}` +
+            `&code=${encodeURIComponent(code)}`;
+        const shortTokenRes = await graphFetchJson(tokenUrl);
+        const shortToken = String(shortTokenRes?.access_token || '').trim();
+        if (!shortToken) {
+            throw new Error('No access_token returned from code exchange');
+        }
+        let finalToken = shortToken;
+        try {
+            const longUrl = `https://graph.facebook.com/${encodeURIComponent(meta.apiVersion)}/oauth/access_token` +
+                `?grant_type=fb_exchange_token` +
+                `&client_id=${encodeURIComponent(meta.appId)}` +
+                `&client_secret=${encodeURIComponent(meta.appSecret)}` +
+                `&fb_exchange_token=${encodeURIComponent(shortToken)}`;
+            const longRes = await graphFetchJson(longUrl);
+            const longToken = String(longRes?.access_token || '').trim();
+            if (longToken) {
+                finalToken = longToken;
+            }
+        }
+        catch (e) {
+            // continue with short-lived if long-lived exchange fails
+        }
+        const discoveryUrl = `https://graph.facebook.com/${encodeURIComponent(meta.apiVersion)}/me` +
+            `?fields=id,name,businesses{owned_whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name}}}` +
+            `&access_token=${encodeURIComponent(finalToken)}`;
+        const me = await graphFetchJson(discoveryUrl);
+        const businesses = Array.isArray(me?.businesses?.data) ? me.businesses.data : [];
+        let waba = null;
+        let phone = null;
+        for (const b of businesses) {
+            const wabas = Array.isArray(b?.owned_whatsapp_business_accounts?.data)
+                ? b.owned_whatsapp_business_accounts.data
+                : [];
+            if (!wabas.length)
+                continue;
+            waba = wabas[0];
+            const phones = Array.isArray(waba?.phone_numbers?.data) ? waba.phone_numbers.data : [];
+            if (phones.length) {
+                phone = phones[0];
+            }
+            break;
+        }
+        const wabaId = String(waba?.id || '').trim();
+        const phoneNumberId = String(phone?.id || '').trim();
+        const displayPhoneNumber = String(phone?.display_phone_number || '').trim();
+        const whatsappName = String(phone?.verified_name || waba?.name || '').trim();
+        if (!wabaId || !phoneNumberId) {
+            throw new Error('Could not discover WhatsApp Business Account / Phone Number from Meta response');
+        }
+        const configDoc = {
+            provider: 'meta',
+            accessToken: finalToken,
+            businessAccountId: wabaId,
+            phoneNumberId,
+            whatsappName,
+            displayPhoneNumber,
+            connectedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await db.collection('whatsappSettings').doc(userId).set(configDoc, { merge: true });
+        return {
+            success: true,
+            message: 'WhatsApp connected',
+            config: {
+                provider: 'meta',
+                phoneNumberId,
+                accessToken: finalToken,
+                businessAccountId: wabaId,
+                whatsappName,
+                displayPhoneNumber,
+            },
+        };
+    }
+    catch (e) {
+        console.error('connectWhatsAppEmbeddedSignup failed', e);
+        throw new functions.https.HttpsError('internal', e?.message || 'Failed to connect WhatsApp');
+    }
+});
 const getTotalAttendees = (g) => {
     const n = typeof g?.totalAttendees === 'number' ? g.totalAttendees : 1;
     if (!Number.isFinite(n))

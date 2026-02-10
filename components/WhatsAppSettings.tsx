@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle, Eye, EyeOff, Loader2, MessageCircle, Save } from 'lucide-react';
 import { getCurrentUser } from '../services/db';
-import { getWhatsAppConfig, saveWhatsAppConfig, WhatsAppConfig } from '../services/whatsapp';
+import { connectWhatsAppEmbeddedSignup, disconnectWhatsApp, getWhatsAppConfig, saveWhatsAppConfig, WhatsAppConfig } from '../services/whatsapp';
 import { useToast } from './Toast';
 
 interface WhatsAppSettingsProps {
@@ -14,6 +14,7 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
   const user = getCurrentUser();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const editingRef = useRef(false);
 
@@ -23,6 +24,8 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
     accessToken: '',
     businessAccountId: '',
   });
+
+  const fbSdkLoadingRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (isOpen && user) {
@@ -42,12 +45,135 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
           phoneNumberId: saved.phoneNumberId || '',
           accessToken: saved.accessToken || '',
           businessAccountId: saved.businessAccountId || '',
+          whatsappName: (saved as any).whatsappName || '',
+          displayPhoneNumber: (saved as any).displayPhoneNumber || '',
         });
       }
     } catch (e) {
       console.error('Failed to load WhatsApp config:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const ensureFacebookSdk = async () => {
+    const w = window as any;
+    if (w.FB && typeof w.FB.init === 'function') return;
+
+    if (fbSdkLoadingRef.current) {
+      await fbSdkLoadingRef.current;
+      return;
+    }
+
+    fbSdkLoadingRef.current = new Promise<void>((resolve, reject) => {
+      try {
+        const existing = document.getElementById('facebook-jssdk');
+        if (existing) {
+          resolve();
+          return;
+        }
+
+        w.fbAsyncInit = function () {
+          try {
+            w.FB.init({
+              appId: String((import.meta as any).env?.VITE_FACEBOOK_APP_ID || ''),
+              cookie: true,
+              xfbml: false,
+              version: 'v22.0',
+            });
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        };
+
+        const js = document.createElement('script');
+        js.id = 'facebook-jssdk';
+        js.src = 'https://connect.facebook.net/en_US/sdk.js';
+        js.async = true;
+        js.defer = true;
+        js.onerror = () => reject(new Error('Failed to load Facebook SDK'));
+        document.body.appendChild(js);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    await fbSdkLoadingRef.current;
+  };
+
+  const handleConnectEmbeddedSignup = async () => {
+    if (!user) return;
+    const appId = String((import.meta as any).env?.VITE_FACEBOOK_APP_ID || '').trim();
+    const configId = String((import.meta as any).env?.VITE_FACEBOOK_CONFIG_ID || '').trim();
+    if (!appId || !configId) {
+      addToast('Missing WhatsApp connect configuration (VITE_FACEBOOK_APP_ID / VITE_FACEBOOK_CONFIG_ID).', 'error');
+      return;
+    }
+
+    setConnecting(true);
+    try {
+      await ensureFacebookSdk();
+      const w = window as any;
+      const resp: any = await new Promise((resolve) => {
+        w.FB.login(
+          (r: any) => resolve(r),
+          {
+            config_id: configId,
+            response_type: 'code',
+            override_default_response_type: true,
+            extras: { setup: { feature: 'whatsapp_embedded_signup' } },
+          }
+        );
+      });
+
+      const code = String(resp?.authResponse?.code || '').trim();
+      if (!code) {
+        addToast('WhatsApp connection was cancelled or no code was returned.', 'error');
+        return;
+      }
+
+      const res = await connectWhatsAppEmbeddedSignup(code);
+      if (!res.success) {
+        addToast(res.message || 'Failed to connect WhatsApp', 'error');
+        return;
+      }
+
+      if (res.config) {
+        setConfig({
+          provider: res.config.provider || 'meta',
+          phoneNumberId: res.config.phoneNumberId || '',
+          accessToken: res.config.accessToken || '',
+          businessAccountId: res.config.businessAccountId || '',
+          whatsappName: (res.config as any).whatsappName || '',
+          displayPhoneNumber: (res.config as any).displayPhoneNumber || '',
+        });
+      } else {
+        await loadConfig();
+      }
+
+      editingRef.current = false;
+      addToast('WhatsApp connected successfully!', 'success');
+    } catch (e: any) {
+      console.error('Embedded signup connect failed:', e);
+      addToast(e?.message || 'Failed to connect WhatsApp', 'error');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!user) return;
+    if (!window.confirm('Disconnect WhatsApp for this account?')) return;
+    setConnecting(true);
+    try {
+      await disconnectWhatsApp(user.id);
+      await loadConfig();
+      addToast('WhatsApp disconnected.', 'success');
+    } catch (e: any) {
+      addToast(e?.message || 'Failed to disconnect WhatsApp', 'error');
+    } finally {
+      setConnecting(false);
     }
   };
 
@@ -63,6 +189,11 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
       : isMetaConfigured
         ? 'Connected'
         : 'Not Configured';
+
+  const connectedSubtext =
+    isMetaConfigured && (config.whatsappName || config.displayPhoneNumber)
+      ? `Connected to ${String(config.whatsappName || 'WhatsApp').trim()}${config.displayPhoneNumber ? ` (${String(config.displayPhoneNumber).trim()})` : ''}`
+      : null;
 
   const handleSave = async () => {
     if (!user) return;
@@ -125,7 +256,7 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
           <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-center justify-between">
             <div className="text-sm text-slate-700">
               <div className="font-semibold text-slate-900">Status</div>
-              <div className="text-xs text-slate-600">{statusText}</div>
+              <div className="text-xs text-slate-600">{connectedSubtext || statusText}</div>
             </div>
             <div className="flex items-center gap-2">
               {config.provider !== 'none' && isMetaConfigured ? (
@@ -142,6 +273,23 @@ export const WhatsAppSettings: React.FC<WhatsAppSettingsProps> = ({ isOpen, onCl
                 </>
               )}
             </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={handleConnectEmbeddedSignup}
+              disabled={connecting}
+              className="flex-1 px-4 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-semibold transition-colors disabled:opacity-50"
+            >
+              {connecting ? 'Connecting...' : 'Connect WhatsApp (Embedded Signup)'}
+            </button>
+            <button
+              onClick={handleDisconnect}
+              disabled={connecting || !isMetaConfigured}
+              className="px-4 py-3 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-100 font-semibold transition-colors disabled:opacity-50"
+            >
+              Disconnect
+            </button>
           </div>
 
           <div>

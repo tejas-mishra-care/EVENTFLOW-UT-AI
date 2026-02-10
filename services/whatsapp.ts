@@ -1,13 +1,57 @@
 
-import { db } from './firebase';
+import { db, functions } from './firebase';
 import { addDoc, collection, doc, getDoc, setDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 
 export interface WhatsAppConfig {
   provider: 'meta' | 'twilio' | 'none';
   phoneNumberId?: string;
   accessToken?: string;
   businessAccountId?: string;
+  whatsappName?: string;
+  displayPhoneNumber?: string;
 }
+
+export const connectWhatsAppEmbeddedSignup = async (
+  code: string
+): Promise<{ success: boolean; message: string; config?: WhatsAppConfig }> => {
+  try {
+    const fn = httpsCallable(functions, 'connectWhatsAppEmbeddedSignup');
+    const res = await fn({ code: String(code || '').trim() });
+    const data = (res.data || {}) as any;
+
+    if (!data || data.success !== true) {
+      return { success: false, message: String(data?.message || 'Failed to connect WhatsApp') };
+    }
+
+    return {
+      success: true,
+      message: String(data?.message || 'WhatsApp connected'),
+      config: data?.config || undefined,
+    };
+  } catch (e: any) {
+    console.error('connectWhatsAppEmbeddedSignup failed:', e);
+    return { success: false, message: e?.message || 'Failed to connect WhatsApp' };
+  }
+};
+
+export const disconnectWhatsApp = async (userId: string): Promise<void> => {
+  const configRef = doc(db, 'whatsappSettings', userId);
+  await setDoc(
+    configRef,
+    {
+      provider: 'none',
+      phoneNumberId: '',
+      accessToken: '',
+      businessAccountId: '',
+      whatsappName: '',
+      displayPhoneNumber: '',
+      disconnectedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+};
 
 const normalizePhoneNumber = (raw: string): { ok: true; value: string } | { ok: false; error: string } => {
   const s = String(raw || '').trim();
